@@ -664,6 +664,8 @@ def main(argv: Sequence[str]) -> None:
   with diagnostic.diagnose(diagnostic_config):
     train_loop(config)
 
+  vertex_tensorboard_manager.end_tb_upload()
+
 
 if __name__ == "__main__":
   app.run(main)

@@ -26,6 +26,8 @@ import max_utils
 from cloud_accelerator_diagnostics import tensorboard
 from cloud_accelerator_diagnostics import uploader
 
+from google.cloud import aiplatform
+
 
 class VertexTensorboardManager:
   """Class to create Vertex AI Tensorboard and upload logs to that instance."""
@@ -71,7 +73,7 @@ class VertexTensorboardManager:
     )
     return tensorboard_url
 
-  def upload_data(self, tensorboard_dir):
+  def upload_data(self, tensorboard_dir, tensorboard_id):
     """Starts an uploader to continuously monitor and upload data to Vertex Tensorboard.
 
     Args:
@@ -90,6 +92,7 @@ class VertexTensorboardManager:
         f"Data will be uploaded to Vertex Tensorboard instance: {tensorboard_name} "
         f"and Experiment: {experiment_name} in {tensorboard_region}."
     )
+    """
     uploader.start_upload_to_tensorboard(
         project=tensorboard_project,
         location=tensorboard_region,
@@ -97,7 +100,22 @@ class VertexTensorboardManager:
         tensorboard_name=tensorboard_name,
         logdir=tensorboard_dir,
     )
+    """
+
+    aiplatform.init(project=tensorboard_project, location=tensorboard_region)
+
+    aiplatform.start_upload_tb_log(
+        tensorboard_id=tensorboard_id,
+        tensorboard_experiment_name=experiment_name,
+        logdir=tensorboard_dir,
+    )
+
+
+
     self.uploader_flag = True
+
+  def end_tb_upload(self):
+    aiplatform.end_upload_tb_log()
 
   def configure_vertex_tensorboard(self, config):
     """Creates Vertex Tensorboard and start thread to upload data to Vertex Tensorboard."""
@@ -123,6 +141,6 @@ class VertexTensorboardManager:
         if tensorboard_url is None:
           raise ValueError("Unable to create Tensorboard and Experiment in Vertex AI.")
         max_logging.log(f"View your Vertex AI Tensorboard at: {tensorboard_url}")
-        self.upload_data(config.tensorboard_dir)
+        self.upload_data(config.tensorboard_dir, config.vertex_tensorboard_id)
       elif os.environ.get("UPLOAD_DATA_TO_TENSORBOARD"):  # running MaxText via XPK
-        self.upload_data(config.tensorboard_dir)
+        self.upload_data(config.tensorboard_dir, config.vertex_tensorboard_id)

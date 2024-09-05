@@ -377,6 +377,8 @@ vertex_tensorboard_project: ""
 # Vertex AI supported regions: https://cloud.google.com/vertex-ai/docs/general/locations#available-regions
 vertex_tensorboard_region: ""
 
+vertex_tensorboard_id: ""
+
 # If set to True, MaxText will perform extra checks using jax.checkify. Note that this will effect performance.
 max_checkify: False
 
