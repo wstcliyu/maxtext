@@ -380,33 +380,15 @@ class AttentionOp(nn.Module):
     mask_shape = (self.config.max_target_length, self.config.max_target_length)
     mask = splash_attention_mask.CausalMask(shape=mask_shape)
 
-    # jax.debug.print("original: mask items = {items}", items = mask.__getitem__((slice(mask.shape[0]),slice(mask.shape[1]))))
-    
-    # Anisha: permute the mask if cp and load_balancing
+    # permute the mask if cp and load_balancing
     if cp_size>1 and load_balanced_context_parallel:
-      # idx = (slice(mask_shape[0]),slice(mask_shape[1]))
-      # q_slice, kv_slice = idx
-      # q_slice = splash_attention_mask._fill_slice(q_slice, mask_shape[0])
-      # kv_slice = splash_attention_mask._fill_slice(kv_slice, mask_shape[1])
-      # q_sequence = jnp.arange(mask_shape[0], dtype=jnp.int32)
-      # q_ids = q_sequence[q_slice]
-      # kv_ids = jnp.arange(kv_slice.start, kv_slice.stop)
-      # #assuming offset == 0:
-      # original_mask_ndarray = q_ids >= kv_ids
-
-      # permuted_mask_ndarray = reorder_mask_load_balancing(tensor = original_mask_ndarray, cp_size= cp_size, seq_dim= 0) 
-      
-      # permuted_mask_ndarray = LoadBalancedCausalMask.create_mask(shape=mask_shape,cp_size=cp_size) 
-      # pdb.set_trace()
-
       mask = create_load_balance_causal_mask(shape=mask_shape,cp_size=cp_size)
-      breakpoint()
     
     # jax.debug.print("permuted: mask items = {items}", items = new_mask.__getitem__((slice(mask.shape[0]),slice(mask.shape[1]))))
     
     # jax.debug.print("new_mask == old_mask = {equal}", equal = new_mask.__getitem__((slice(mask.shape[0]),slice(mask.shape[1])))==mask.__getitem__((slice(mask.shape[0]),slice(mask.shape[1]))))
 
-    #Anisha: figure out local_sliding attention + load_balancing, default is global
+    #TODO: figure out local_sliding attention + load_balancing, default is global
     # Apply local masking if local sliding attention is enabled.
     if self.attention_type == AttentionType.LOCAL_SLIDING:
       if self.sliding_window_size is None:
@@ -451,7 +433,7 @@ class AttentionOp(nn.Module):
             axis_names_kv,
             segment_axis_names_q,
             segment_axis_names_kv,
-            segment_axis_names_splash_kernel, #TODO: add the manual sharding,
+            segment_axis_names_splash_kernel,
         ),
         out_specs=axis_names_q,
         check_rep=False,
@@ -1794,9 +1776,7 @@ class WrapperNpNDArray():
 def create_load_balance_causal_mask(
   shape: tuple[int, int],
   # offset: int = 0, #Anisha: do we need offset?
-  # mask_ndarray: jnp.ndarray = None,
   cp_size: int = 1,
-  # shard_count: int = 1,
   ):
   # self.offset = offset
   idx = (slice(shape[0]),slice(shape[1]))
