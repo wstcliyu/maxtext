@@ -41,7 +41,7 @@ from train import save_checkpoint
 Transformer = models.Transformer
 
 
-def _possibly_unroll_params(config, training_state, training_state_annotations, mesh):
+def _possibly_unroll_params(config, training_state, training_state_annotations, mesh, lora_training_state, lora_state_annotations):
   """If input layers are scanned, and force_unroll is set,
   return modify training_state and train_state_annotations to be "unrolled".
   Otherwise do nothing."""
@@ -51,12 +51,20 @@ def _possibly_unroll_params(config, training_state, training_state_annotations, 
   training_state_layers = training_state.params["params"]["decoder"]["layers"]
   training_state_annotations_layers = training_state_annotations.params["params"]["decoder"]["layers"]
 
+  lora_training_state_layers = lora_training_state.params["params"]["decoder"]["layers"]
+  lora_state_annotations_layers = lora_state_annotations.params["params"]["decoder"]["layers"]
+
   def new_pspec(x):
     return jax.sharding.PartitionSpec(*x[0 : config.param_scan_axis] + x[config.param_scan_axis + 1 :])
 
   new_per_layer_state_annotation = jax.tree_util.tree_map(new_pspec, training_state_annotations_layers)
   new_per_layer_state_sharding = jax.tree_util.tree_map(
       lambda x: jax.sharding.NamedSharding(mesh, x), new_per_layer_state_annotation
+  )
+
+  new_per_layer_lora_state_annotation = jax.tree_util.tree_map(new_pspec, lora_state_annotations_layers)
+  new_per_layer_lora_state_sharding = jax.tree_util.tree_map(
+      lambda x: jax.sharding.NamedSharding(mesh, x), new_per_layer_lora_state_annotation
   )
 
   for i in range(config.num_decoder_layers):
@@ -70,10 +78,15 @@ def _possibly_unroll_params(config, training_state, training_state_annotations, 
     training_state.params["params"]["decoder"][f"layers_{i}"] = new_layer
     training_state_annotations.params["params"]["decoder"][f"layers_{i}"] = new_per_layer_state_annotation
 
+    new_lora_layer = jax.jit(slice_ith, out_shardings=new_per_layer_lora_state_sharding)(lora_training_state_layers)
+    lora_training_state.params["params"]["decoder"][f"layers_{i}"] = new_lora_layer
+
   del training_state.params["params"]["decoder"]["layers"]
+  del lora_training_state.params["params"]["decoder"]["layers"]
   del training_state_annotations.params["params"]["decoder"]["layers"]
 
   jax.tree_util.tree_map(lambda x: x.delete(), training_state_layers)
+  jax.tree_util.tree_map(lambda x: x.delete(), lora_training_state_layers)
 
 
 def _read_train_checkpoint(config, checkpoint_manager, mesh):
@@ -84,10 +97,10 @@ def _read_train_checkpoint(config, checkpoint_manager, mesh):
   rng = random.PRNGKey(0)
   learning_rate_schedule = max_utils.create_learning_rate_schedule(config)
   tx = optimizers.get_optimizer(config, learning_rate_schedule)
-  state, state_mesh_notations, _, _ = max_utils.setup_training_state(model, None, tx, config, rng, mesh, checkpoint_manager)
+  state, state_mesh_notations, lora_state, lora_state_annotations, _, _ = max_utils.setup_training_state(model, None, tx, config, rng, mesh, checkpoint_manager)
   num_params = max_utils.calculate_num_params_from_pytree(state.params)
   max_logging.log(f"In input checkpoint Number of model params={num_params/1e9:.3f} billion")
-  return state, state_mesh_notations
+  return state, state_mesh_notations, lora_state, lora_state_annotations
 
 
 def _save_decode_checkpoint(config, state, checkpoint_manager):
@@ -121,22 +134,36 @@ def generate_decode_checkpoint(config):
 
   # Create a checkpoint manager to save decode checkpoint at config.checkpoint_dir
   checkpoint_manager = checkpointing.create_orbax_checkpoint_manager(
-      config.checkpoint_dir,
+      config.checkpoint_dir + "base/",
       config.enable_checkpointing,
       config.async_checkpointing,
       config.checkpoint_period,
   )
   # Read training state from config.load_paramaters_path
   max_logging.log(f"Read training checkpoint from: {config.load_full_state_path}")
-  training_state, training_state_annotations = _read_train_checkpoint(config, checkpoint_manager, mesh)
+  training_state, training_state_annotations, lora_training_state, lora_state_annotations = _read_train_checkpoint(config, checkpoint_manager, mesh)
   assert training_state.opt_state != {}, "missing opt_state in training checkpoint"
 
-  _possibly_unroll_params(config, training_state, training_state_annotations, mesh)
+  _possibly_unroll_params(config, training_state, training_state_annotations, mesh, lora_training_state, lora_state_annotations)
 
   # Save decode state to config's checkpoint directory at step 0
-  max_logging.log(f"Save decode checkpoint at: {config.checkpoint_dir}")
+  max_logging.log(f"Save decode checkpoint at: {config.checkpoint_dir}base/")
   _save_decode_checkpoint(config, training_state, checkpoint_manager)
-  max_logging.log(f"Successfully generated decode checkpoint at: {config.checkpoint_dir}0/items")
+  max_logging.log(f"Successfully generated decode checkpoint at: {config.checkpoint_dir}base/0/items")
+ 
+ 
+  # Create a checkpoint manager to save decode checkpoint at config.checkpoint_dir/lora
+  checkpoint_manager = checkpointing.create_orbax_checkpoint_manager(
+      config.checkpoint_dir + "lora/",
+      config.enable_checkpointing,
+      config.async_checkpointing,
+      config.checkpoint_period,
+  )
+
+  # Save decode state to config's checkpoint directory at step 0
+  max_logging.log(f"Save decode checkpoint at: {config.checkpoint_dir}lora/")
+  _save_decode_checkpoint(config, lora_training_state, checkpoint_manager)
+  max_logging.log(f"Successfully generated decode checkpoint at: {config.checkpoint_dir}lora/0/items")
   return True
 
 

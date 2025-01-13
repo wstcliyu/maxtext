@@ -669,6 +669,45 @@ def init_initial_state(model, tx, config, is_training, key):
   return init_decode_state(model.apply, model_vars)
 
 
+def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
+  """
+  Apply the LoRA weights on the base weights of the model using formula:
+                W_new = W + BA, where 
+                    W_new is the new weights with LoRA applied
+                    W is the base model weights
+                    B is lora_b adapter weights
+                    A is lora_a adapter weights
+  """
+
+  def lora_update_or_base(base_weight, lora_a, lora_b):
+    if lora_a is not None and lora_b is not None:
+      return base_weight + jnp.einsum("br,rnd->bnd", lora_b, lora_a) * lora_scale_factor
+    else:
+      return base_weight        # Keep the base weight if no Lora update
+
+  def apply_lora_recursively(base_params, lora_params, module_name, lora_scale_factor=1.0):
+      for name, param in lora_params.items():
+        if isinstance(param, dict):
+          apply_lora_recursively(base_params[name], param, f"{module_name}.{name}", lora_scale_factor)
+        elif param is not None:
+          if name not in ["lora_a.kernel", "lora_b.kernel"]:
+            raise ValueError(f"Unexpected non-lora specific weights ({module_name}.{name}) found in the lora_params")
+
+          lora_b = lora_params["lora_a.kernel"]
+          lora_a = lora_params["lora_b.kernel"]
+
+          base = base_params["kernel"]
+
+          max_logging.log(f"Shapes of Lora and Base weights during Lora_Apply on module {module_name}.{name}:\nlora_a.shape={lora_a.shape}\nlora_b.shape={lora_b.shape}\nbase.shape={base.shape}")
+
+          base_params["kernel"] = lora_update_or_base(base, lora_a, lora_b)
+          break
+          
+
+  apply_lora_recursively(base_params, lora_params, lora_scale_factor)
+
+
+
 def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
   """Setup decode state by loading params from a checkpoint.
   Args:
@@ -685,19 +724,34 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
   if not config.load_parameters_path:
     # generate random params
     max_logging.log("No decode checkpoint specified - generating random weights.")
-    state, state_mesh_annotations, _, _ = setup_initial_state(
+    state, state_mesh_annotations, lora_state, _, _ = setup_initial_state(
         model, None, None, config, rng, mesh, checkpoint_manager, False
     )
+    del lora_state # Not need of Lora_state as in this case it is random weights.
   else:
     # Load params from checkpoint
     max_logging.log(f"Loading decode params from {config.load_parameters_path}")
     unboxed_abstract_state, state_mesh_annotations, _ = get_abstract_state(model, None, config, rng, mesh, False)
     with nn_partitioning.axis_rules(config.logical_axis_rules):
       params = checkpointing.load_params_from_path(config.load_parameters_path, unboxed_abstract_state.params)
-      max_logging.log(f"AMANGU (max_utils.py): Params = {params}")
-      lora_params = checkpointing.load_params_from_path(config.lora_parameters_base_path + "/lora-weights_lora_A/0/items", unboxed_abstract_state.params)
-      max_logging.log(f"AMANGU (max_utils.py): Params = {lora_params}")
+
+    # Load LoRA weights
+    lora_params = None
+    if config.lora_config_path:
+      with open(config.lora_config_path, 'r') as f:
+        lora_config = json.load(f)
+
+      lora_state, _ = get_lora_abstract_state(unboxed_abstract_state.params, lora_config)
+
+      with nn_partitioning.axis_rules(config.logical_axis_rules):
+        lora_params = checkpointing.load_params_from_path(config.lora_parameters_base_path, lora_state.params)
+      
+      lora_rank = int(lora_config["r"])
+      lora_scale_factor = float(lora_config["lora_alpha"]) / lora_rank
+      apply_lora_on_base_params(params, lora_params, lora_scale_factor)
+
     state = init_decode_state(None, params)
+
 
   state = unbox_logicallypartioned(state)
   return state, state_mesh_annotations
@@ -748,6 +802,10 @@ def setup_initial_state(
       model, tx, config, rng, mesh, is_training
   )
 
+  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nunboxed_abstract_state={unboxed_abstract_state}")
+  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nstate_mesh_annotations={state_mesh_annotations}")
+  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nstate_mesh_shardings={state_mesh_shardings}")
+
   # Initialization
   with nn_partitioning.axis_rules(config.logical_axis_rules):
     restored, raw_params = checkpointing.load_state_if_possible(
@@ -781,7 +839,32 @@ def setup_initial_state(
 
   state = unbox_logicallypartioned(state)
 
-  return state, state_mesh_annotations, state_mesh_shardings, data_iterator
+  lora_state = None
+  lora_state_annotations=None
+  if config.lora_config_path:
+    with open(config.lora_config_path, 'r') as f:
+      lora_config = json.load(f)
+
+    lora_state, lora_state_annotations = get_lora_abstract_state(unboxed_abstract_state.params, lora_config)
+
+    with nn_partitioning.axis_rules(config.logical_axis_rules):
+      restored_lora, raw_lora_params = checkpointing.load_state_if_possible(
+          checkpoint_manager,
+          data_iterator,
+          config.lora_parameters_base_path,
+          config.load_full_state_path,
+          lora_state,
+          config.enable_single_replica_ckpt_restoring,
+          config.dataset_type,
+      )
+
+      if restored_lora:
+        raise NotImplementedError("This codepath is not implemented for LoRA adapters yet.")
+      else:
+        lora_state = lora_state.replace(params=raw_lora_params)
+        lora_state = unbox_logicallypartioned(lora_state)
+
+  return state, state_mesh_annotations, lora_state, lora_state_annotations, state_mesh_shardings, data_iterator
 
 
 # Learning Rate Schedule
@@ -933,6 +1016,8 @@ def get_abstract_state(model, tx, config, rng, mesh, is_training=True):
   with nn_partitioning.axis_rules(config.logical_axis_rules):
     abstract_state = jax.eval_shape(init_state_partial)
 
+  max_logging.log(f"AMANGU log (max_util.py): abstract_state in get_abstract_state:\n{abstract_state}")
+
   state_logical_annotations = nn.get_partition_spec(abstract_state)
 
   state_mesh_shardings = nn.logical_to_mesh_sharding(state_logical_annotations, mesh, config.logical_axis_rules)
@@ -952,6 +1037,172 @@ def get_abstract_state(model, tx, config, rng, mesh, is_training=True):
       state_mesh_annotations,
       state_mesh_shardings,
   )
+
+
+def get_lora_abstract_state(base_abstract_params, lora_config):
+  """
+  Generates an abstract state representing only the LoRA parameters,
+  inferring sharding information from the base parameters.
+
+  Args:
+    base_abstract_params: A PyTree containing jax.ShapeDtypeStruct objects
+                            representing the abstract state of the base model
+                            parameters. This includes sharding information.
+    lora_config: A config of the Lora adapter that includes details about the
+                 Lora like rank, or target_modules on which lora is implemented.
+
+  Returns:
+    A TrainState object representing the abstract state of the LoRA parameters, including
+    inferred sharding information.
+  """
+  other_lora_format_to_jax_format = {
+          "q_proj": "self_attention.query",
+          "v_proj": "self_attention.value",
+          }
+
+  lora_target_modules = lora_config["target_modules"]
+  lora_target_modules = [other_lora_format_to_jax_format.get(s, s) for s in lora_target_modules]
+
+  max_logging.log(f"lora_target_modules: {lora_target_modules}")
+
+  lora_rank = int(lora_config["r"])
+
+  lora_abstract_params = {}
+
+  def get_lora_param_shape(base_array_shape, lora_rank, lora_module):
+    base_array_dimensions = len(base_array_shape)
+
+    if base_array_dimensions > 4:
+      raise ValueError(f"Encountered unexpected shape={base_array_shape} of array in base params. Array dimensions > 4 not supported.")
+
+    if lora_module in ["self_attention.query", "self_attention.key", "self_attention.value"]:
+      lora_a_shape = base_array_shape[:-2] + (lora_rank,)
+      lora_b_shape = (lora_rank,) + base_array_shape[1:]
+    elif lora_module in ["self_attention.out"]:
+      lora_a_shape = base_array_shape[:-1] + (lora_rank,)
+      if base_array_dimensions == 4:
+        lora_b_shape = (lora_rank, base_array_shape[1], base_array_shape[-1])
+      else:
+        lora_b_shape = (lora_rank, base_array_shape[-1])
+    else:
+      raise ValueError(f"Unsupported lora_module={lora_module}")
+    
+    max_logging.log(f"Lora shapes for module={lora_module} & base_array_shape={base_array_shape}:\nlora_a_shape={lora_a_shape}\nlora_b_shape={lora_b_shape}")
+
+    return lora_a_shape, lora_b_shape
+
+
+  def get_lora_param_sharding(base_param_sharding, lora_module):
+    if base_param_sharding is None:         # Base parameter is replicated
+      return None, None         # Replicate LoRA parameters as well
+
+    base_sharding_pspec_size = len(base_param_sharding.spec)
+
+    if base_sharding_pspec_size > 4:
+      raise ValueError(f"Encountered unexpected size of PartitionSpec in sharding. Size > 4 is not supported")
+    
+    base_mesh = base_param_sharding.mesh
+    base_memory_kind = base_param_sharding.memory_kind
+    base_pspec = base_param_sharding.spec
+
+    if lora_module in ["self_attention.query", "self_attention.key", "self_attention.value"]:
+      lora_a_pspec_tuple = base_pspec[:-2] + ((),)
+      lora_a_pspec = jax.sharding.PartitionSpec(*lora_a_pspec_tuple)
+
+      lora_b_pspec_tuple = ((),) + base_pspec[1:]
+      lora_b_pspec = jax.sharding.PartitionSpec(*lora_b_pspec_tuple)
+
+    elif lora_module in ["self_attention.out"]:
+      lora_a_pspec_tuple = base_pspec[:-1] + ((),)
+      lora_a_pspec = jax.sharding.PartitionSpec(*lora_a_pspec_tuple)
+      if base_sharding_pspec_size == 4:
+        lora_b_pspec = jax.sharding.PartitionSpec((), base_pspec[1], base_pspec[-1])
+      else:
+        lora_b_pspec = jax.sharding.PartitionSpec((), base_pspec[-1])
+    else:
+      raise ValueError(f"Unsupported lora_module={lora_module}")
+
+    max_logging.log(f"Lora sharding pspec for module={lora_module}:\nbase_pspec={base_pspec}\nlora_a_pspec={lora_a_pspec}\nlora_b_pspec={lora_b_pspec}")
+
+    lora_a_sharding = jax.sharding.NamedSharding(mesh=base_mesh, spec=lora_a_pspec, memory_kind=base_memory_kind)
+    lora_b_sharding = jax.sharding.NamedSharding(mesh=base_mesh, spec=lora_b_pspec, memory_kind=base_memory_kind)
+
+    return lora_a_sharding, lora_b_sharding
+    
+
+  def module_is_target_module(module, target_modules):
+    """Checks if any of the target_modules is part of the current module which represents an array. 
+
+    Args: 
+      module: A string where nested dictionary keys are concatenated to make a path of the internal most kernel/scale arrays.
+      target_modules: A list of strings which represents the target_modules on which lora is applied.
+
+    Return:
+      The matched target_module, if that is found in the current module path, None otherwise.
+    """
+    for target_module in target_modules:
+      if target_module in module:
+        return target_module
+    return None
+
+
+  def add_lora_params(lora_params, module_name, base_params, lora_rank, lora_target_modules):
+    for name, param in base_params.items():
+      if isinstance(param, dict):
+        lora_params[name] = {}
+        add_lora_params(lora_params[name], f"{module_name}.{name}", param, lora_rank, lora_target_modules)
+      else:
+        if name not in ["kernel", "scale", "embedding"]:
+          raise ValueError(f"Unexpected key={name} exists in the abstract params of base model.")
+        
+        if not isinstance(param, jax.ShapeDtypeStruct):
+          raise ValueError(f"Unexpected type found in the abstract params of the base model.")
+
+        lora_a_key = f"lora_a.kernel"
+        lora_b_key = f"lora_b.kernel"
+
+        target_module = module_is_target_module(module_name, lora_target_modules)
+
+        if target_module is not None:
+          lora_a_shape, lora_b_shape = get_lora_param_shape(param.shape, lora_rank, target_module)
+          base_dtype = param.dtype
+          lora_a_sharding, lora_b_sharding = get_lora_param_sharding(param.sharding,target_module)
+
+          lora_params[lora_a_key] = jax.ShapeDtypeStruct(
+                  shape=lora_a_shape,
+                  dtype=base_dtype,
+                  sharding=lora_a_sharding)
+
+          lora_params[lora_b_key] = jax.ShapeDtypeStruct(
+                  shape=lora_b_shape,
+                  dtype=base_dtype,
+                  sharding=lora_b_sharding)
+        else:
+          lora_params[name] = None
+
+  def get_lora_annotations(lora_abstract_params):
+    return jax.tree_util.tree_map(lambda x: x.sharding.spec, lora_abstract_params)
+
+
+  add_lora_params(lora_abstract_params, "", base_abstract_params, lora_rank, lora_target_modules)
+
+  max_logging.log(f"AMANGU log (max_utils.py): lora_abstract_params:\n{lora_abstract_params}")
+
+  unboxed_abstract_lora_state =  train_state.TrainState(
+          step=0, 
+          apply_fn=None,
+          params=lora_abstract_params,
+          tx=None,
+          opt_state={})
+
+  lora_state_mesh_annotations =  train_state.TrainState(
+          step=0, 
+          apply_fn=None,
+          params=get_lora_annotations(lora_abstract_params),
+          tx=None,
+          opt_state={})
+
+  return unboxed_abstract_lora_state, lora_state_mesh_annotations
 
 
 def get_prefill_kv_cache_annotations(model, config, rng, mesh):

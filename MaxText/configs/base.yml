@@ -34,6 +34,7 @@ load_parameters_path: ""
 
 # LoRA parameters path
 lora_parameters_base_path: ""
+lora_config_path: ""
 
 # Loads a full checkpoint including optimizer state and step count from a specific directory
 # e.g. gs://my-base-output-directory/my-previous-run-name/checkpoints/items/NUMBER or NUMBER/items
