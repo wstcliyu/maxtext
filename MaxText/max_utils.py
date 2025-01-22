@@ -685,16 +685,19 @@ def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
     else:
       return base_weight        # Keep the base weight if no Lora update
 
-  def apply_lora_recursively(base_params, lora_params, module_name, lora_scale_factor=1.0):
+  def apply_lora_recursively(base_params, lora_params, module_name):
       for name, param in lora_params.items():
         if isinstance(param, dict):
-          apply_lora_recursively(base_params[name], param, f"{module_name}.{name}", lora_scale_factor)
+          apply_lora_recursively(base_params[name], param, f"{module_name}.{name}")
         elif param is not None:
           if name not in ["lora_a.kernel", "lora_b.kernel"]:
             raise ValueError(f"Unexpected non-lora specific weights ({module_name}.{name}) found in the lora_params")
-
+ 
           lora_b = lora_params["lora_a.kernel"]
           lora_a = lora_params["lora_b.kernel"]
+
+          #lora_a = np.transpose(lora_params["lora_a.kernel"]).reshape(8, 32, 128)
+          #lora_b = np.transpose(lora_params["lora_b.kernel"].reshape(8, 4096))
 
           base = base_params["kernel"]
 
@@ -703,8 +706,9 @@ def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
           base_params["kernel"] = lora_update_or_base(base, lora_a, lora_b)
           break
           
+  max_logging.log(f"In apply_lora_on_base_params:\nbase params: {base_params}\nlora params: {lora_params}")
 
-  apply_lora_recursively(base_params, lora_params, lora_scale_factor)
+  apply_lora_recursively(base_params, lora_params, "")
 
 
 
@@ -748,10 +752,14 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
       
       lora_rank = int(lora_config["r"])
       lora_scale_factor = float(lora_config["lora_alpha"]) / lora_rank
+ 
       apply_lora_on_base_params(params, lora_params, lora_scale_factor)
 
     state = init_decode_state(None, params)
 
+  max_logging.log(f"Summary of PyTree data for base and lora weights:")
+  summarize_pytree_data(params, "Base Weights")
+  summarize_pytree_data(lora_params, "LoRA Weights", True)
 
   state = unbox_logicallypartioned(state)
   return state, state_mesh_annotations
@@ -1016,7 +1024,7 @@ def get_abstract_state(model, tx, config, rng, mesh, is_training=True):
   with nn_partitioning.axis_rules(config.logical_axis_rules):
     abstract_state = jax.eval_shape(init_state_partial)
 
-  max_logging.log(f"AMANGU log (max_util.py): abstract_state in get_abstract_state:\n{abstract_state}")
+  max_logging.log(f"max_util.py: abstract_state in get_abstract_state:\n{abstract_state}")
 
   state_logical_annotations = nn.get_partition_spec(abstract_state)
 
@@ -1186,7 +1194,7 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
 
   add_lora_params(lora_abstract_params, "", base_abstract_params, lora_rank, lora_target_modules)
 
-  max_logging.log(f"AMANGU log (max_utils.py): lora_abstract_params:\n{lora_abstract_params}")
+  max_logging.log(f"max_utils.py: lora_abstract_params:\n{lora_abstract_params}")
 
   unboxed_abstract_lora_state =  train_state.TrainState(
           step=0, 
