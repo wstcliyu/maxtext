@@ -156,6 +156,18 @@ class MaxEngine(engine_api.Engine):
     max_utils.print_mem_stats("After load_params")
     return params
 
+  def load_and_apply_adapter(self, base_params, adapter_config_path, adapter_weights_path):
+    """Load the fine-tuned adapter (currently only LoRA) and apply on base weights."""
+    print(f"Loading and applying the adapter on base weights.")
+
+    max_utils.load_and_apply_adapter(self.config,
+                                     self.abstract_params,
+                                     base_params,
+                                     adapter_config_path,
+                                     adapter_weights_path)
+
+
+
   def quantize_params(self, state, rng: Optional[jax.random.PRNGKey] = None):
     """Forward pass to quantize decode params."""
     if rng is None:
