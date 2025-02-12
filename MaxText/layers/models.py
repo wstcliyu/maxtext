@@ -431,6 +431,7 @@ class Decoder(nn.Module):
               model_mode,
               page_state=page_state,
           )
+<<<<<<< HEAD
           num_moe_layers = cfg.num_decoder_layers - cfg.first_num_dense_layers
           y, _ = self.scan_decoder_layers(cfg, moe_layer, num_moe_layers, "moe_layers", mesh)(
               y,
@@ -477,6 +478,8 @@ class Decoder(nn.Module):
                 model_mode,
             )
 
+=======
+>>>>>>> 7f0b0fc6 (fix)
     y = self.get_norm_layer()(
         dtype=cfg.dtype,
         weight_dtype=cfg.weight_dtype,
@@ -592,4 +595,6 @@ class Transformer(nn.Module):
         model_mode=model_mode,
         page_state=page_state,
     )
+    if model_mode == common_types.MODEL_MODE_AUTOREGRESSIVE:
+      jax.debug.print("logits in decoder: {}, logits_shape: {}, decoder_input_tokens: {}, decoder_positions: {}, decoder_segment_ids: {}", logits, logits.shape, decoder_input_tokens, decoder_positions, decoder_segment_ids)
     return logits
