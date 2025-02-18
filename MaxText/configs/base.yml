@@ -32,6 +32,9 @@ normalization_layer_epsilon: 1.e-05
 # e.g. gs://my-base-output-directory/my-previous-run-name/checkpoints/items/NUMBER or NUMBER/items
 load_parameters_path: ""
 
+# Load adapters like LoRA from a catalog file at a given path
+adapters_catalog_file_path: ""
+
 # LoRA parameters path
 lora_parameters_base_path: ""
 lora_config_path: ""

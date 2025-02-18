@@ -39,6 +39,7 @@ import max_utils
 import inference_utils
 import pyconfig
 import jaxlib
+import json
 
 import warnings
 
@@ -108,6 +109,11 @@ class MaxEngine(engine_api.Engine):
     self.kv_cache_shardings = None
     self.state_mesh_annotations = None
 
+  def print_stats(self, label: str):
+    max_utils.print_mem_stats(label)
+    max_utils.print_ram_stats(label)
+
+
   def load_params(self, *args, rng: Optional[jax.random.PRNGKey] = None, **kwargs) -> Params:
     """Load Parameters, typically from GCS"""
     # pylint: disable=unused-argument
@@ -153,8 +159,56 @@ class MaxEngine(engine_api.Engine):
       params = self.quantize_params(state, rng3)
     else:
       params = state.params
-    max_utils.print_mem_stats("After load_params")
+    self.print_stats("After load_params")
+
     return params
+
+
+  def load_adapters_from_catalog_file(self):
+    """Load the list of adapters from the catalog file."""
+    adapter_params_and_configs = {}
+    if self.config.adapters_catalog_file_path:
+      with open(self.config.adapters_catalog_file_path, 'r') as f:
+        adapters = json.load(f)
+
+        for key, value in adapters.items():
+          adapter_weights_path = value["adapter_path"] + "/0/items"
+
+          params, config = self.load_single_adapter(value["adapter_path"])
+
+          adapter_id = key
+          config["adapter_path"] = adapter_weights_path
+
+          adapter_params_and_configs[adapter_id] = {"config": config, "params": params}
+
+    return adapter_params_and_configs
+
+
+  def load_single_adapter(self, adapter_path):
+    """Load Single adapter from adapter_path. Expect adapter_config.json and weights at that path."""
+
+    adapter_config_path = adapter_path + "/adapter_config.json"
+    adapter_weights_path = adapter_path + "/0/items"
+
+    params, config = max_utils.load_adapter(self.config,
+                                            self.abstract_params,
+                                            adapter_config_path,
+                                            adapter_weights_path)
+
+    config["adapter_path"] = adapter_weights_path
+
+    self.print_stats("After load_single_adapter.")
+
+    return params, config
+
+
+  def apply_adapter(self, params, adapter_config, adapter_params):
+    """Apply the adapter params on the base params."""
+
+    lora_rank = int(adapter_config["r"])
+    lora_scale_factor = float(adapter_config["lora_alpha"]) / lora_rank
+    max_utils.apply_lora_on_base_params(params, adapter_params, lora_scale_factor)
+
 
   def load_and_apply_adapter(self, base_params, adapter_config_path, adapter_weights_path):
     """Load the fine-tuned adapter (currently only LoRA) and apply on base weights."""
@@ -165,7 +219,6 @@ class MaxEngine(engine_api.Engine):
                                      base_params,
                                      adapter_config_path,
                                      adapter_weights_path)
-
 
 
   def quantize_params(self, state, rng: Optional[jax.random.PRNGKey] = None):
@@ -251,6 +304,7 @@ class MaxEngine(engine_api.Engine):
     Returns:
       kv_cache: For the resulting text.
     """
+    self.print_stats("Start MaxEngine::prefill")
     if existing_prefix:
       raise ValueError("We don't know what to do with existing_prefix")
 
@@ -313,6 +367,7 @@ class MaxEngine(engine_api.Engine):
 
     cache = new_vars["cache"]
     cache = self._maybe_stack_prefill_result_cache(cache)
+    self.print_stats("End MaxEngine::prefill")
 
     return {
         "logits": selected_logits,
@@ -330,6 +385,7 @@ class MaxEngine(engine_api.Engine):
       sampler: Optional[Callable[[Any], Any]] = None,  # pylint: disable=unused-argument
       rng: Optional[jax.random.PRNGKey] = None,
   ) -> Tuple[DecodeState, engine_api.ResultTokens]:
+    self.print_stats("Start MaxEngine::generate")
     """Run one generate step"""
     if rng is None:
       rng = jax.random.PRNGKey(0)
@@ -375,6 +431,7 @@ class MaxEngine(engine_api.Engine):
         length_idx=(2, 3),
         samples_per_slot=1,
     )
+    self.print_stats("End MaxEngine::generate")
 
     return {
         "logits": out_logits,

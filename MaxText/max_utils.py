@@ -26,6 +26,7 @@ import functools
 import time
 import optax
 import os
+import psutil
 import socket
 import subprocess
 from etils import epath
@@ -244,6 +245,25 @@ def upload_dump(local_dir, target_dir, module_name=None, delete_local_after=True
   max_logging.log(f"HLO Dump Uploaded to {target_dir}!")
   if delete_local_after:
     shutil.rmtree(local_dir)
+
+
+def read_json_from_gcs(file_path):
+  try:
+    storage_client = storage.Client()
+
+    bucket_name, file_name = parse_gcs_bucket_and_prefix(file_path)
+
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_name)
+
+    json_string = blob.download_as_string()
+
+    data = json.loads(json_string)
+
+    return data
+  except Exception as e:
+    print(f"Error reading JSON file from GCS: {e}")
+    return None
 
 
 def maybe_initialize_jax_distributed_system(raw_keys):
@@ -759,10 +779,39 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
 
   max_logging.log(f"Summary of PyTree data for base and lora weights:")
   summarize_pytree_data(params, "Base Weights")
-  summarize_pytree_data(lora_params, "LoRA Weights", True)
+
+  if lora_params is not None:
+    summarize_pytree_data(lora_params, "LoRA Weights", True)
 
   state = unbox_logicallypartioned(state)
   return state, state_mesh_annotations
+
+
+def load_adapter(config,
+                 base_abstract_state_params,
+                 adapter_config_path,
+                 adapter_weights_path):
+  """
+  Load the LoRA weights into a PyTree and return it.
+  """
+  # Load LoRA weights
+  lora_params = None
+  lora_config = None
+  if adapter_config_path:
+    if adapter_config_path.startswith("gs://"):
+      lora_config = read_json_from_gcs(adapter_config_path)
+      if lora_config is None:
+        return None, None
+    else:
+      with open(adapter_config_path, 'r') as f:
+        lora_config = json.load(f)
+
+    lora_state, _ = get_lora_abstract_state(base_abstract_state_params, lora_config)
+
+    with nn_partitioning.axis_rules(config.logical_axis_rules):
+      lora_params = checkpointing.load_params_from_path(adapter_weights_path, lora_state.params)
+
+  return lora_params, lora_config
 
 
 def load_and_apply_adapter(config,
@@ -1363,6 +1412,21 @@ def print_mem_stats(label: str):
       max_logging.log(f"\tUsing (GB) {used} / {limit} ({used/limit:%}) on {d}")
   except (RuntimeError, KeyError, TypeError) as ex:
     max_logging.log(f"\tMemstats unavailable, error: {ex}")
+
+
+def print_ram_stats(label: str):
+  max_logging.log(f"\nRAMstats: {label}:")
+  try:
+    ram = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+
+    total = round(ram.total / 2**30, 2)
+    available = round(ram.available / 2**30, 2)
+    used = round(ram.used / 2**30, 2)
+
+    max_logging.log(f"\tUsing (GB) {used} / {total} ({used/total:%}) -->  Available:{available}")
+  except (RuntimeError, KeyError, TypeError) as ex:
+    max_logging.log(f"\tRAM stats unavailable, error: {ex}")
 
 
 def print_system_information():
