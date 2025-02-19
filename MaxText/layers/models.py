@@ -17,6 +17,7 @@
 # pylint: disable=no-name-in-module
 
 from typing import Any, Callable, Optional
+import uuid
 
 
 from flax import linen as nn
@@ -567,6 +568,7 @@ class Transformer(nn.Module):
       model_mode=common_types.MODEL_MODE_TRAIN,
       slot: Optional[int] = None,
       true_length: Optional[int] = None,
+      request_id: uuid.UUID = None,
   ):
     """Applies Transformer decoder-branch on encoded-input and target."""
 
