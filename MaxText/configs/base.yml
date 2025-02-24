@@ -486,6 +486,7 @@ inference_metadata_file: "" # path to a json file
 inference_server: "MaxtextInterleavedServer"  # inference server to start
 inference_benchmark_test: False
 enable_model_warmup: False
+enable_llm_inference_pool: False
 
 # Stack prefill cache across the layer to reduce the
 # Python layer latency.
