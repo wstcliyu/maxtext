@@ -21,6 +21,9 @@ import unittest
 import jax
 import jax.numpy as jnp
 
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
 
 def create_default_value(prefix=None, true_length=1, padded_length=1, tokens=None) -> prefix_cache.Value:
   if prefix is None:
@@ -83,9 +86,7 @@ class ValueTest(unittest.TestCase):
 
   def test_throw_exception_if_prefix_containing_non_array(self):
     with self.assertRaises(TypeError):
-      Value(
-          prefix={"a": "abc"}
-      )
+      Value(prefix={"a": "abc"})
 
   def test_adjust_true_length_shorter_equal_than_tokens(self):
     value = create_default_value(true_length=100, tokens=jnp.array([1, 2, 3]))
@@ -123,6 +124,40 @@ class ValueTest(unittest.TestCase):
     assert value2.prefix is not value1_1.prefix
     assert value2.prefix["decoder"] is not value1_1.prefix["decoder"]
     assert value2 == value1_1
+
+  @pytest.mark.tpu_only
+  def test_device_saved_as_prefix_tree(self):
+    local_devices = jax.local_devices()
+    num_devices = jax.local_device_count()
+    mesh_shape1 = (num_devices,)
+    device_mesh1 = mesh_utils.create_device_mesh(mesh_shape1, devices=local_devices)
+    mesh1 = Mesh(device_mesh1, axis_names=("x",))
+    partition_spec1_1 = PartitionSpec("x", None)
+    partition_spec1_2 = PartitionSpec(None, "x")
+    sharding1_1 = NamedSharding(mesh1, partition_spec1_1)
+    sharding1_2 = NamedSharding(mesh1, partition_spec1_2)
+
+    # assume number of devices will be multiple of 2
+    mesh_shape2 = (num_devices // 2, 2)
+    device_mesh2 = mesh_utils.create_device_mesh(mesh_shape2, devices=local_devices)
+    mesh2 = Mesh(device_mesh2, axis_names=("x", "y"))
+    partition_spec2 = PartitionSpec("x", "y", None)
+    sharding2 = NamedSharding(mesh2, partition_spec2)
+
+    prefix = {
+        "a": jnp.ones((512, 512), device=local_devices[0]),
+        "b": jnp.ones((mesh_shape1[0], 512, 512), device=sharding1_1),
+        "c": jnp.ones((512, mesh_shape1[0], 512), device=sharding1_2),
+        "d": jnp.ones((mesh_shape2[0], mesh_shape2[1], 512), device=sharding2),
+    }
+    expected_device = {
+        "a": local_devices[0],
+        "b": sharding1_1,
+        "c": sharding1_2,
+        "d": sharding2,
+    }
+    value = create_default_value(prefix=prefix)
+    assert value.device == expected_device
 
 
 class PrefixCacheTrieTest(unittest.TestCase):
@@ -421,7 +456,7 @@ class PrefixCacheTest(unittest.TestCase):
     Load the cache will copy from cache.
     Clear the cache will clear the saved cache.
     """
-    device = jax.local_devices(0)[0]
+    device = jax.local_devices()[0]
 
     def get_byte_in_use():
       jax.clear_caches()
