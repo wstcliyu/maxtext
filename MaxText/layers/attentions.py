@@ -434,8 +434,6 @@ class AttentionOp(nn.Module):
               tensor=decoder_segment_ids_kv, cp_size=cp_size, seq_dim=1, to_contiguous=True
           )
           
-      jax.debug.print("decoder_segment_ids_unpermuted={decoder_segment_ids_unpermuted}",decoder_segment_ids_unpermuted=decoder_segment_ids_unpermuted)
-      jax.debug.print("decoder_segment_ids_q={decoder_segment_ids_q}",decoder_segment_ids_q=decoder_segment_ids_q)
       if decoder_segment_ids_q is not None:
         decoder_segment_ids_tuple = splash_attention_kernel.SegmentIds(decoder_segment_ids_q, decoder_segment_ids_unpermuted)
       else:
