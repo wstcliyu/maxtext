@@ -86,7 +86,7 @@ class ValueTest(unittest.TestCase):
 
   def test_throw_exception_if_prefix_containing_non_array(self):
     with self.assertRaises(TypeError):
-      Value(prefix={"a": "abc"})
+      prefix_cache.Value(prefix={"a": "abc"})
 
   def test_adjust_true_length_shorter_equal_than_tokens(self):
     value = create_default_value(true_length=100, tokens=jnp.array([1, 2, 3]))
@@ -236,7 +236,7 @@ class PrefixCacheTrieTest(unittest.TestCase):
     assert trie.get_longest_common_prefix_key((4, 5, 6)) == (4, 5, 6)
 
 
-class HBMCacheTest(unittest.TestCase):
+class BasicCacheTest(unittest.TestCase):
 
   def test_is_enough_space_remain(self):
     value = create_default_value()

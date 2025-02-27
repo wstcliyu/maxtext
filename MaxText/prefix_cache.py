@@ -63,6 +63,7 @@ if cached_prefix is None or matched_len != orig_key_len:
 
 from collections import OrderedDict
 from typing import Tuple, Any, Optional
+import abc
 import dataclasses
 import jax
 import jax.numpy as jnp
@@ -77,6 +78,7 @@ Key = Tuple[Token, ...]
 Prefix = Any  # KVCache for one prompt
 
 
+# YYY: need to prevent accidentally copy to device using jit, while prevent tree parse overhead
 @jax.jit
 def tree_copy(tree):
   return jax.tree.map(lambda x: x.copy() if isinstance(x, jax.Array) else x, tree)
@@ -267,16 +269,13 @@ class PrefixCacheTrie:
       node = node.parent
 
 
-class HBMCache:
-  """Stores kv cache values in HBM.
-
-  Cache is remain the sharding status before save.
-  """
+class BasicCache:
+  """Basic cache implement calculating size and save value into dict without modify."""
 
   def __init__(self, max_size_bytes: int):
     """
     Args:
-      max_size_bytes: Maximum bytes of HBM to use for cache
+      max_size_bytes: Maximum bytes use for cache
     """
     self._remain_size_bytes = max_size_bytes
     self._saved_values: dict[Key, Value] = {}
@@ -286,14 +285,16 @@ class HBMCache:
     return self._remain_size_bytes >= value.prefix_size_bytes
 
   def add_to_cache(self, key: Key, value: Value) -> bool:
-    """
-    Value will be moved to the cache, which means cannot used the same value reference after add_to_cache.
-
-    The jax may modified the value even stored in another python reference.
-    If the value need to be used after add_to_cache, make sure copy them before add_to_cache.
-    Return False if cache is full.
+    """Add value to cache and return False if cache is full.
+    The value will not copied. Be aware not to modify the value after add to cache.
+    Cache is expected to have enough space.
     """
     if not self.has_enough_space(value):
+      logger.warning(
+          "should check enough space before add to cache, but remain=%d not enough for value=%d",
+          self._remain_size_bytes,
+          value.prefix_size_bytes,
+      )
       return False
 
     self._saved_values[key] = value
@@ -302,10 +303,125 @@ class HBMCache:
 
   def retrieve_from_cache(self, key: Key) -> Optional[Value]:
     """Return value from cache or None if not found.
-    Be aware the cache is not return a copy. If additional modified needed, clone the Value first.
+    Be aware the cache is not return a copy. Clone the Value first if additional modification needed,
+    Key is expected to be found.
     """
     if key in self._saved_values:
+      logger.warning("key=%r should exist in cache before retrieve, but not found", key)
       return self._saved_values[key]
+    return None
+
+  def evict_cache(self, key: Key) -> Optional[Value]:
+    """Evict and return value, or None if key is not in cache.
+    Key is expected to be found.
+    """
+    if key not in self._saved_values:
+      logger.warning("key=%r should exist in cache before evict, but not found", key)
+      return None
+    value = self._saved_values.pop(key)
+    self._remain_size_bytes += value.prefix_size_bytes
+    return value
+
+
+class HBMCache:
+  """Stores kv cache values in HBM.
+
+  Cache is remain the sharding status before save.
+  It is wrapper for BasicCache which do not modify the value.
+  If the Value is not in HBM, it will still not in HBM after saved.
+  """
+
+  def __init__(self, max_size_bytes: int):
+    """
+    Args:
+      max_size_bytes: Maximum bytes of HBM to use for cache
+    """
+    self._cache = BasicCache(max_size_bytes)
+
+  def has_enough_space(self, value: Value) -> bool:
+    """Calculate if value size can add to cache."""
+    return self._cache.has_enough_space(value)
+
+  def add_to_cache(self, key: Key, value: Value) -> bool:
+    """Value will be moved to the cache, which means cannot used the same value reference after add_to_cache.
+    Cache is expected to have enough space.
+    """
+    return self._cache.add_to_cache(key, value)
+
+  def retrieve_from_cache(self, key: Key) -> Optional[Value]:
+    """Return value from cache or None if not found.
+    Be aware the cache is not return a copy. Clone the Value first if additional modification needed,
+    Key is expected to be found.
+    """
+    return self._cache.retrieve_from_cache(key)
+
+  def evict_cache(self, key: Key) -> Optional[Value]:
+    """Evict and return value, or None if key is not in cache.
+    Key is expected to be found.
+    """
+    return self._cache.evict_cache(key)
+
+
+class HostCache:
+  """Stores KV Cache values in host DRAM."""
+
+  def __init__(self, max_size_bytes: int):
+    """
+    Args:
+      max_size_bytes: Maximum bytes of host DRAM to use for cache
+    """
+    self._remain_size_bytes = max_size_bytes
+    self._saved_values: dict[Key, Value] = {}
+
+  def has_enough_space(self, value: Value) -> bool:
+    """Calculate if value size can add to cache."""
+    return self._remain_size_bytes >= value.prefix_size_bytes
+
+  def add_to_cache(self, key: Key, value: Value) -> bool:
+    """Add value into host DRAM preserving the original device status.
+
+    The cache will copy to the host DRAM if originally on device,
+    or with the same reference to the value if originally on host.
+    Do not use the value after add_to_cache if on device.
+
+    Args:
+      key: key for the value
+      value: Prefix Cache value
+    Return:
+      False if cache is full.
+    """
+    if not self.has_enough_space(value):
+      return False
+
+    host_value = Value(
+        prefix=jax.device_get(value.prefix),
+        true_length=value.true_length,
+        padded_length=value.padded_length,
+        tokens=value.tokens,
+        prefix_size_bytes=value.prefix_size_bytes,
+        device=value.device,
+    )
+
+    self._saved_values[key] = host_value
+    self._remain_size_bytes -= value.prefix_size_bytes
+    return True
+
+  def retrieve_from_cache(self, key: Key) -> Optional[Value]:
+    """Return value from cache to the original device or None if not found.
+    If the original device save in the cache is cpu, the cache will not copied.
+    Do not modify the cache prefix retrieved.
+    """
+    if key in self._saved_values:
+      value = self._saved_values[key]
+      device_value = Value(
+          prefix=jax.device_put(value.prefix, value.device),
+          true_length=value.true_length,
+          padded_length=value.padded_length,
+          tokens=value.tokens,
+          prefix_size_bytes=value.prefix_size_bytes,
+          device=value.device,
+      )
+      return device_value
     return None
 
   def evict_cache(self, key: Key) -> Optional[Value]:
