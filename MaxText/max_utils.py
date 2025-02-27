@@ -1155,7 +1155,6 @@ def print_system_information():
   max_logging.log(f"System Information: Jaxlib Version: {jax.lib.__version__}")
   max_logging.log(f"System Information: Jax Backend: {jax.lib.xla_bridge.get_backend().platform_version}")
 
-<<<<<<< HEAD
 
 def permute_to_match_maxtext_rope(arr):
   """Permutes the Huggingface Rope to match the MaxText logic."""
@@ -1176,7 +1175,7 @@ def unpermute_from_match_maxtext_rope(arr, model_size):
   evens = arr[..., ::2]
   odds = arr[..., 1::2]
   return jax.numpy.concatenate((evens, odds), axis=arr.ndim - 1)
-=======
+
 def reorder_tokens_context_parallelism(tensor, cp_size: int, seq_dim: int, to_contiguous: bool):
   """Reorders a tensor for load balancing the compute of causal attention."""
 
@@ -1233,4 +1232,3 @@ def reorder_tokens_context_parallelism(tensor, cp_size: int, seq_dim: int, to_co
   combined = jnp.stack(parts, axis=seq_dim)
 
   return jnp.reshape(combined, ori_tensor_shape)
->>>>>>> f828f867 (temp commot)
