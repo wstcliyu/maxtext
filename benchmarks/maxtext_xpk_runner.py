@@ -512,7 +512,7 @@ def on_device_benchmark_runner(
 def main() -> int:
   # Variables to configure:
   output_bucket = 'gs://DIR'
-  base_docker_image = _DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
+  base_docker_image = 'gcr.io/tpu-prod-env-multipod/mazumdera_runner3' #_DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
 
   # Set up the clusters to run workloads on!
   v5e_cluster_config = XpkClusterConfig(
@@ -529,12 +529,22 @@ def main() -> int:
       device_type='v6e-256',
   )
 
+  v6e_cluster_config_yucmhab = XpkClusterConfig(
+      device_type='v6e-256',
+      zone='us-east5-b',
+      project='tpu-prod-env-one-vm',
+      cluster_name='bodaborg-v6e-256-dnd-yucmhab'
+  )
+
   xpk_workload_cmds = []
   xpk_workload_names = []
 
   list_of_models = [
-    model_configs.llama2_70b_4096_sc,
+    # model_configs.llama2_70b_4096_sc,
     # model_configs.default_128
+    model_configs.llama3_1_70b_131072,
+    model_configs.llama3_1_70b_131072_1,
+    model_configs.llama3_1_70b_131072_2
   ]
 
   # Loop possibilities:
