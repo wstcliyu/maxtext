@@ -833,7 +833,6 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
     unboxed_abstract_state, state_mesh_annotations, _ = get_abstract_state(model, None, config, rng, mesh, False)
     with nn_partitioning.axis_rules(config.logical_axis_rules):
       params = checkpointing.load_params_from_path(config.load_parameters_path, unboxed_abstract_state.params)
-
     state = init_decode_state(None, params)
 
   state = unbox_logicallypartioned(state)
@@ -1169,8 +1168,6 @@ def get_abstract_state(model, tx, config, rng, mesh, is_training=True):
   with nn_partitioning.axis_rules(config.logical_axis_rules):
     abstract_state = jax.eval_shape(init_state_partial)
 
-  #max_logging.log(f"max_util.py: abstract_state in get_abstract_state:\n{abstract_state}")
-
   state_logical_annotations = nn.get_partition_spec(abstract_state)
 
   state_mesh_shardings = nn.logical_to_mesh_sharding(state_logical_annotations, mesh, config.logical_axis_rules)
@@ -1218,8 +1215,6 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
   lora_target_modules = lora_config["target_modules"]
   lora_target_modules = [other_lora_format_to_jax_format.get(s, s) for s in lora_target_modules]
 
-  #max_logging.log(f"lora_target_modules: {lora_target_modules}")
-
   lora_rank = int(lora_config["r"])
 
   lora_abstract_params = {}
@@ -1242,8 +1237,6 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
     else:
       raise ValueError(f"Unsupported lora_module={lora_module}")
     
-    #max_logging.log(f"Lora shapes for module={lora_module} & base_array_shape={base_array_shape}:\nlora_a_shape={lora_a_shape}\nlora_b_shape={lora_b_shape}")
-
     return lora_a_shape, lora_b_shape
 
 
@@ -1276,8 +1269,6 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
         lora_b_pspec = jax.sharding.PartitionSpec((), base_pspec[-1])
     else:
       raise ValueError(f"Unsupported lora_module={lora_module}")
-
-    #max_logging.log(f"Lora sharding pspec for module={lora_module}:\nbase_pspec={base_pspec}\nlora_a_pspec={lora_a_pspec}\nlora_b_pspec={lora_b_pspec}")
 
     lora_a_sharding = jax.sharding.NamedSharding(mesh=base_mesh, spec=lora_a_pspec, memory_kind=base_memory_kind)
     lora_b_sharding = jax.sharding.NamedSharding(mesh=base_mesh, spec=lora_b_pspec, memory_kind=base_memory_kind)
@@ -1340,8 +1331,6 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
 
 
   add_lora_params(lora_abstract_params, "", base_abstract_params, lora_rank, lora_target_modules)
-
-  # max_logging.log(f"max_utils.py: lora_abstract_params:\n{lora_abstract_params}")
 
   unboxed_abstract_lora_state =  train_state.TrainState(
           step=0, 
