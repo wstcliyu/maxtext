@@ -478,6 +478,7 @@ class Decoder(nn.Module):
                 decoder_positions,
                 deterministic,
                 model_mode,
+                page_state=page_state,
             )
     y = self.get_norm_layer()(
         dtype=cfg.dtype,
