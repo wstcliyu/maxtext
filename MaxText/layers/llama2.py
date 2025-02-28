@@ -31,7 +31,7 @@ from layers import models
 from layers import quantizations
 
 import common_types
-import page_managers
+from inference import page_manager
 from typing import Optional
 
 Array = common_types.Array
@@ -75,7 +75,7 @@ class LlamaDecoderLayer(nn.Module):
       decoder_positions,
       deterministic,
       model_mode,
-      page_state: Optional[page_managers.PageState] = None,
+      page_state: Optional[page_manager.PageState] = None,
   ):
     cfg = self.config
     mesh = self.mesh

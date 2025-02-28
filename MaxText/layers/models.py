@@ -26,7 +26,7 @@ import jax
 import jax.numpy as jnp
 from jax.ad_checkpoint import checkpoint_name
 import common_types
-import page_managers
+from inference import page_manager
 from layers import attentions
 from layers import embeddings
 from layers import linears
@@ -381,7 +381,7 @@ class Decoder(nn.Module):
       decoder_segment_ids=None,
       deterministic=False,
       model_mode=common_types.MODEL_MODE_TRAIN,
-      page_state: Optional[page_managers.PageState] = None,
+      page_state: Optional[page_manager.PageState] = None,
   ):
     cfg = self.config
     mesh = self.mesh
@@ -549,7 +549,7 @@ class Transformer(nn.Module):
     self.decoder = Decoder(config=cfg, shared_embedding=self.shared_embedding, mesh=mesh, quant=self.quant)
 
     if self.config.attention == "paged":
-      self.page_manager = page_managers.PageManager(
+      self.page_manager = page_manager.PageManager(
           num_pages=self.config.num_pages,
           tokens_per_page=self.config.tokens_per_page,
           slots=int(self.config.per_device_batch_size * jax.device_count()),
@@ -589,7 +589,7 @@ class Transformer(nn.Module):
           #return arr
         #jax.debug.print("slot {}", slot)
         #slot = jax.jit(first_nonzero_index)(decoder_input_tokens)
-        #page_state = page_managers.PageState(page_state.page_status, swap(page_state.page_map, slot), swap(page_state.sequence_lengths, slot), swap(page_state.num_pages_used, slot), swap(page_state.current_page, slot), swap(page_state.current_page_position, slot))
+        #page_state = page_manager.PageState(page_state.page_status, swap(page_state.page_map, slot), swap(page_state.sequence_lengths, slot), swap(page_state.num_pages_used, slot), swap(page_state.current_page, slot), swap(page_state.current_page_position, slot))
         jax.debug.print("page_map: {}, sequence_lengths: {}, num_pages_used: {}, current_page: {}, current_page_position: {}", page_state.page_map, page_state.sequence_lengths, page_state.num_pages_used, page_state.current_page, page_state.current_page_position)
       elif model_mode == common_types.MODEL_MODE_PREFILL:
         page_state = self.page_manager(

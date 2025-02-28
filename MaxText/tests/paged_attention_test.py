@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from flax.core import freeze
 from flax import linen as nn
 from layers.attentions import PagedAttentionOp, Attention
-from page_managers import PageManager, PageState
+from inference.page_manager import PageManager, PageState
 import common_types
 
 
