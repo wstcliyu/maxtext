@@ -24,7 +24,6 @@ from jax.experimental.pallas.ops.tpu.paged_attention import paged_attention
 from jax.sharding import PartitionSpec as P
 import jax.numpy as jnp
 import common_types
-from inference.paged_attention import PagedAtten
 from inference import page_manager
 
 Mesh = common_types.Mesh
