@@ -41,6 +41,7 @@ LENGTH = common_types.LENGTH
 HEAD = common_types.HEAD
 D_KV = common_types.D_KV
 
+shard_map = shard_map.shard_map
 
 class PagedAttentionOp(nn.Module):
   mesh: Mesh
