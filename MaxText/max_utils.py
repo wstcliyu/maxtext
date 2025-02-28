@@ -32,6 +32,7 @@ import subprocess
 from etils import epath
 from collections.abc import Sequence
 import collections
+from pathlib import Path
 from typing import Any, Tuple
 
 import max_logging
@@ -247,7 +248,8 @@ def upload_dump(local_dir, target_dir, module_name=None, delete_local_after=True
     shutil.rmtree(local_dir)
 
 
-def read_json_from_gcs(file_path):
+def gcs_path_exists(file_path):
+  """Checks if a GCS file_path exits."""
   try:
     storage_client = storage.Client()
 
@@ -256,14 +258,92 @@ def read_json_from_gcs(file_path):
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(file_name)
 
+    return blob.exists()
+  except Exception as e:
+    print(f"Error while accessing {file_path} from GCE: {str(e)}")
+    return False
+
+
+def gcs_list_directories(directory_path):
+  """
+  Lists "directories" (prefixes one level down) within a GCS "directory".
+
+  Args:
+      directory_path: The prefix representing the parent "directory".
+
+  Returns:
+      A list of "directory" names (prefixes).
+  """
+  storage_client = storage.Client()
+
+  bucket_name, directory_prefix = parse_gcs_bucket_and_prefix(directory_path)
+
+  bucket = storage_client.bucket(bucket_name)
+
+  # Ensures the prefix has a trailing slash to simulate a directory
+  if not directory_prefix.endswith('/'):
+    directory_prefix += '/'
+
+  # Use list_blobs with a delimiter to get "directories"
+  delimiter = '/'
+  blobs = bucket.list_blobs(prefix=directory_prefix, delimiter=delimiter)
+
+  directories = []
+  # Iterate through the blobs and extract the "directories"
+  for page in blobs.pages:
+    for prefix in page.prefixes:
+      path_obj = Path(prefix)
+
+      directory = path_obj.name
+
+      directories.append(directory)
+
+  return directories
+
+
+def read_json_from_gcs(file_path):
+  try:
+    storage_client = storage.Client()
+
+    bucket_name, file_prefix = parse_gcs_bucket_and_prefix(file_path)
+
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_prefix)
+
     json_string = blob.download_as_string()
 
     data = json.loads(json_string)
 
     return data
   except Exception as e:
-    print(f"Error reading JSON file from GCS: {e}")
+    print(f"Error reading JSON file from GCS: {str(e)}")
     return None
+
+
+def write_dict_to_gcs_json(data_dict, file_path):
+  """
+  Writes a Python dictionary to a JSON file in GCS.
+
+  Args:
+    data_dict: The Python dictionary to write
+    file_path: GCS path (Bucket + blob) to create the json file
+  """
+  try:
+    storage_client = storage.Client()
+
+    bucket_name, file_prefix = parse_gcs_bucket_and_prefix(file_path)
+
+    bucket = storage_client.bucket(bucket_name)
+
+    blob = bucket.blob(file_prefix)
+
+    # Convert the dictionary to a JSON string
+    json_string = json.dumps(data_dict, indent=4)
+
+    # Upload the JSON string to GCS
+    blob.upload_from_string(json_string, content_type="application/json")
+  except Exception as e:
+    print(f"Failed to write json file at {file_path} with error: {str(e)}")
 
 
 def maybe_initialize_jax_distributed_system(raw_keys):
@@ -697,6 +777,10 @@ def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
                     W is the base model weights
                     B is lora_b adapter weights
                     A is lora_a adapter weights
+
+  Here both the base_params and lora_params are PyTrees of same structure depending
+  on the base model. The leaf nodes of lora_params are only not-None if it is the target
+  module for lora in its config.
   """
 
   def lora_update_or_base(base_weight, lora_a, lora_b):
@@ -716,20 +800,12 @@ def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
           lora_b = lora_params["lora_a.kernel"]
           lora_a = lora_params["lora_b.kernel"]
 
-          #lora_a = np.transpose(lora_params["lora_a.kernel"]).reshape(8, 32, 128)
-          #lora_b = np.transpose(lora_params["lora_b.kernel"].reshape(8, 4096))
-
           base = base_params["kernel"]
-
-          #max_logging.log(f"Shapes of Lora and Base weights during Lora_Apply on module {module_name}.{name}:\nlora_a.shape={lora_a.shape}\nlora_b.shape={lora_b.shape}\nbase.shape={base.shape}")
 
           base_params["kernel"] = lora_update_or_base(base, lora_a, lora_b)
           break
           
-  # max_logging.log(f"In apply_lora_on_base_params:\nbase params: {base_params}\nlora params: {lora_params}")
-
   apply_lora_recursively(base_params, lora_params, "")
-
 
 
 def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
@@ -748,10 +824,9 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
   if not config.load_parameters_path:
     # generate random params
     max_logging.log("No decode checkpoint specified - generating random weights.")
-    state, state_mesh_annotations, lora_state, _, _ = setup_initial_state(
+    state, state_mesh_annotations, _, _ = setup_initial_state(
         model, None, None, config, rng, mesh, checkpoint_manager, False
     )
-    del lora_state # Not need of Lora_state as in this case it is random weights.
   else:
     # Load params from checkpoint
     max_logging.log(f"Loading decode params from {config.load_parameters_path}")
@@ -759,29 +834,7 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
     with nn_partitioning.axis_rules(config.logical_axis_rules):
       params = checkpointing.load_params_from_path(config.load_parameters_path, unboxed_abstract_state.params)
 
-    # Load LoRA weights
-    lora_params = None
-    if config.lora_config_path:
-      with open(config.lora_config_path, 'r') as f:
-        lora_config = json.load(f)
-
-      lora_state, _ = get_lora_abstract_state(unboxed_abstract_state.params, lora_config)
-
-      with nn_partitioning.axis_rules(config.logical_axis_rules):
-        lora_params = checkpointing.load_params_from_path(config.lora_parameters_base_path, lora_state.params)
-      
-      lora_rank = int(lora_config["r"])
-      lora_scale_factor = float(lora_config["lora_alpha"]) / lora_rank
- 
-      apply_lora_on_base_params(params, lora_params, lora_scale_factor)
-
     state = init_decode_state(None, params)
-
-  max_logging.log(f"Summary of PyTree data for base and lora weights:")
-  summarize_pytree_data(params, "Base Weights")
-
-  if lora_params is not None:
-    summarize_pytree_data(lora_params, "LoRA Weights", True)
 
   state = unbox_logicallypartioned(state)
   return state, state_mesh_annotations
@@ -800,11 +853,17 @@ def load_adapter(config,
   if adapter_config_path:
     if adapter_config_path.startswith("gs://"):
       lora_config = read_json_from_gcs(adapter_config_path)
-      if lora_config is None:
-        return None, None
     else:
       with open(adapter_config_path, 'r') as f:
         lora_config = json.load(f)
+
+    if lora_config is None:
+      max_logging.log(f"Failed to read lora_config from {adapter_config_path}.")
+      return None, None
+
+    if not gcs_path_exists(adapter_weights_path + "/commit_success.txt"):
+      max_logging.log(f"Failed to read lora_weights from {adapter_weights_path}.")
+      return None, None
 
     lora_state, _ = get_lora_abstract_state(base_abstract_state_params, lora_config)
 
@@ -812,33 +871,6 @@ def load_adapter(config,
       lora_params = checkpointing.load_params_from_path(adapter_weights_path, lora_state.params)
 
   return lora_params, lora_config
-
-
-def load_and_apply_adapter(config,
-                           base_abstract_state_params,
-                           base_params,
-                           adapter_config_path,
-                           adapter_weights_path):
-  """
-  Load and apply the LoRA weights on the base weights. Here loading the weights require an abstract state
-  of LoRA weights which is created from the abstract_state of the base and the loRA_config. After that
-  LoRA weights are computed and merged into the base_weights which were passed as input to this function.
-  """
-  # Load LoRA weights
-  lora_params = None
-  if adapter_config_path:
-    with open(adapter_config_path, 'r') as f:
-      lora_config = json.load(f)
-
-    lora_state, _ = get_lora_abstract_state(base_abstract_state_params, lora_config)
-
-    with nn_partitioning.axis_rules(config.logical_axis_rules):
-      lora_params = checkpointing.load_params_from_path(adapter_weights_path, lora_state.params)
-
-    lora_rank = int(lora_config["r"])
-    lora_scale_factor = float(lora_config["lora_alpha"]) / lora_rank
-
-    apply_lora_on_base_params(base_params, lora_params, lora_scale_factor)
 
 
 def setup_training_state(model, data_iterator, tx, config, rng, mesh, checkpoint_manager):
@@ -886,10 +918,6 @@ def setup_initial_state(
       model, tx, config, rng, mesh, is_training
   )
 
-  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nunboxed_abstract_state={unboxed_abstract_state}")
-  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nstate_mesh_annotations={state_mesh_annotations}")
-  #max_logging.log(f"AMANGU: get_abstract_state() response of the base model:\nstate_mesh_shardings={state_mesh_shardings}")
-
   # Initialization
   with nn_partitioning.axis_rules(config.logical_axis_rules):
     restored, raw_params = checkpointing.load_state_if_possible(
@@ -923,19 +951,60 @@ def setup_initial_state(
 
   state = unbox_logicallypartioned(state)
 
+  return state, state_mesh_annotations, state_mesh_shardings, data_iterator
+
+
+def setup_initial_lora_state(
+    model,
+    data_iterator,
+    tx,
+    config,
+    rng,
+    mesh,
+    checkpoint_manager,
+    lora_adapter_path
+):
+  """We initialize the model and optimizer state, and optionally load from a
+  checkpoint as necessary.
+
+  Args:
+    model: the flax model to initialize
+    tx: the optax.GradientTransformation
+    config: config object
+    rng: jax.prng key
+    mesh: jax.devices() mesh
+    checkpoint_manager: an Orbax checkpointing.CheckpointManager object
+    lora_adapter_path: Path of the LoRA adapter which is expected to have
+        `adapter_config.json` and adapter weights
+
+  Returns:
+    state: the initialized train state
+    state_mesh_annotations: the mesh annotations for the train state
+  """
+
   lora_state = None
-  lora_state_annotations=None
-  if config.lora_config_path:
-    with open(config.lora_config_path, 'r') as f:
-      lora_config = json.load(f)
+  lora_state_annotations = None
+  lora_config = None
+
+  if lora_adapter_path:
+    max_logging.log(f"Setting initial state of LoRA with lora_adapter_path = {lora_adapter_path}")
+    unboxed_abstract_state, state_mesh_annotations, state_mesh_shardings = get_abstract_state(
+        model, tx, config, rng, mesh, True
+    )
+
+    lora_config_path = lora_adapter_path + config.lora_config_file_name
+
+    lora_config = read_json_from_gcs(lora_config_path)
 
     lora_state, lora_state_annotations = get_lora_abstract_state(unboxed_abstract_state.params, lora_config)
+
+    lora_weights_path = lora_adapter_path + "/0/items"
 
     with nn_partitioning.axis_rules(config.logical_axis_rules):
       restored_lora, raw_lora_params = checkpointing.load_state_if_possible(
           checkpoint_manager,
           data_iterator,
-          config.lora_parameters_base_path,
+          lora_weights_path,
           config.load_full_state_path,
           lora_state,
           config.enable_single_replica_ckpt_restoring,
@@ -948,7 +1017,7 @@ def setup_initial_state(
         lora_state = lora_state.replace(params=raw_lora_params)
         lora_state = unbox_logicallypartioned(lora_state)
 
-  return state, state_mesh_annotations, lora_state, lora_state_annotations, state_mesh_shardings, data_iterator
+  return lora_config, lora_state, lora_state_annotations
 
 
 # Learning Rate Schedule
@@ -1141,7 +1210,9 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
   """
   other_lora_format_to_jax_format = {
           "q_proj": "self_attention.query",
+          "k_proj": "self_attention.key",
           "v_proj": "self_attention.value",
+          "o_proj": "self_attention.out",
           }
 
   lora_target_modules = lora_config["target_modules"]
@@ -1414,7 +1485,7 @@ def print_mem_stats(label: str):
     max_logging.log(f"\tMemstats unavailable, error: {ex}")
 
 
-def print_ram_stats(label: str):
+def print_cpu_ram_stats(label: str):
   max_logging.log(f"\nRAMstats: {label}:")
   try:
     ram = psutil.virtual_memory()

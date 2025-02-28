@@ -50,6 +50,7 @@ import psutil
 from tqdm import tqdm
 
 import max_logging
+import max_utils
 from train import save_checkpoint
 import checkpointing
 
@@ -259,7 +260,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
   }
 
   # self attention ###############################################
-  max_logging.log("Processing self attention in LoRA")
   self_attention_lora = {
       "query": {
           "lora_a.kernel": None,
@@ -289,8 +289,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         lora_A_q = lora_chkpt_vars[f"layers.{layer_idx}.attention.wq.lora_A.weights"].type(torch.float16).numpy().transpose()
         lora_B_q = lora_chkpt_vars[f"layers.{layer_idx}.attention.wq.lora_B.weights"].type(torch.float16).numpy().transpose()
 
-        max_logging.log(f"Shapes of loRA weights:\nlora_A_q={lora_A_q.shape}\nlora_B_q={lora_B_q.shape}")
-
         lora_B_q = np.reshape(lora_B_q, [lora_rank, base_num_query_heads, head_dim])
 
         if self_attention_lora["query"]["lora_a.kernel"] is None:
@@ -303,8 +301,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
       if "k_proj" in target_module:
         lora_A_k = lora_chkpt_vars[f"layers.{layer_idx}.attention.wk.lora_A.weights"].type(torch.float16).numpy().transpose()
         lora_B_k = lora_chkpt_vars[f"layers.{layer_idx}.attention.wk.lora_B.weights"].type(torch.float16).numpy().transpose()
-
-        max_logging.log(f"Shapes of loRA weights:\nlora_A_k={lora_A_k.shape}\nlora_B_k={lora_B_k.shape}")
 
         lora_B_k = np.reshape(lora_B_k, [lora_rank, base_num_query_heads, head_dim])
 
@@ -319,8 +315,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         lora_A_v = lora_chkpt_vars[f"layers.{layer_idx}.attention.wv.lora_A.weights"].type(torch.float16).numpy().transpose()
         lora_B_v = lora_chkpt_vars[f"layers.{layer_idx}.attention.wv.lora_B.weights"].type(torch.float16).numpy().transpose()
 
-        max_logging.log(f"Shapes of loRA weights:\nlora_A_v={lora_A_v.shape}\nlora_B_v={lora_B_v.shape}")
-
         lora_B_v = np.reshape(lora_B_v, [lora_rank, base_num_query_heads, head_dim])
 
         if self_attention_lora["value"]["lora_a.kernel"] is None:
@@ -333,8 +327,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
       if "o_proj" in target_module:
         lora_A_o = lora_chkpt_vars[f"layers.{layer_idx}.attention.wo.lora_A.weights"].type(torch.float16).numpy()
         lora_B_o = lora_chkpt_vars[f"layers.{layer_idx}.attention.wo.lora_B.weights"].type(torch.float16).numpy()
-
-        max_logging.log(f"Shapes of loRA weights:\nlora_A_o={lora_A_o.shape}\nlora_B_o={lora_B_o.shape}")
 
         # This is for "out" matrix. So we don't transpose it above as well as here we have to reshape the lora_A_o instead of lora_B_o.
         lora_A_o = np.reshape(lora_A_o, [lora_rank, base_num_query_heads, head_dim])
@@ -361,7 +353,6 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
   if self_attention_lora["out"]["lora_a.kernel"] is not None:
       self_attention_lora["out"]["lora_a.kernel"] = np.transpose(self_attention_lora["out"]["lora_a.kernel"], axes=(2, 0, 3, 1))
       self_attention_lora["out"]["lora_b.kernel"] = np.transpose(self_attention_lora["out"]["lora_b.kernel"], axes=(1, 0, 2))
-
 
   # Not sure if I need to scale the lora query weights by dividing it by np.sqrt(head_dim). Validate it later.
 
@@ -713,13 +704,35 @@ def save_jax_weights_to_checkpoint(maxtext_model_path, jax_weights):
     checkpoint_manager.wait_until_finished()
 
 
+def list_folders_pathlib(directory):
+  """Lists folders in a directory using pathlib module.
+
+  Args:
+    directory: The path to the directory
+
+  Returns:
+    A list of strings, where each string is the name of a folder.
+    Returns an empty list if the directory doesn't exist or is not a directory.
+  """
+  dir_path = pathlib.Path(directory)
+
+  if not dir_path.is_dir():
+    return []
+
+  folders = []
+  for item in dir_path.iterdir():
+    if item.is_dir():
+      folders.append(item.name)   # Append only the name
+
+  return folders
+
+
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--base-model-path", type=str, required=True)
   parser.add_argument("--maxtext-model-path", type=str, required=True)
   parser.add_argument("--model-size", type=str, required=True)
-  parser.add_argument("--lora-config-path", type=str, required=False)
-  parser.add_argument("--lora-model-path", type=str, required=False)
+  parser.add_argument("--lora-adapters-path", type=str, required=False)
 
   args = parser.parse_args()
 
@@ -729,26 +742,42 @@ if __name__ == "__main__":
   os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={SIMULATED_CPU_DEVICES_COUNT}"
 
 
-  save_jax_weights_to_checkpoint(args.maxtext_model_path + "/base_weights", convert_to_jax_weights(args.base_model_path, args.model_size))
-  max_logging.log(f"Successfully saved base_weights to {args.maxtext_model_path}/base_weights.")
+  base_weights_path = args.maxtext_model_path
+
+  if args.lora_adapters_path:
+    base_weights_path += "/base"
+
+  save_jax_weights_to_checkpoint(base_weights_path, convert_to_jax_weights(args.base_model_path, args.model_size))
+  max_logging.log(f"Successfully saved base_weights to {base_weights_path}.")
   
   lora_config = None
-  if args.lora_config_path:
-    with open(args.lora_config_path, 'r') as f:
-      lora_config = json.load(f)
+  if args.lora_adapters_path:
+    max_logging.log(f"LoRA Adapters Path = {args.lora_adapters_path}")
+    if args.lora_adapters_path.startswith("gs://"):
+      max_logging.log(f"GCS Source path for the LoRA adapters is not supported as of now.")
+      raise NotImplementedError
 
-    if args.lora_model_path:
-      lora_config["lora_model_path"] = args.lora_model_path
-    else:
-      lora_config = None
+    lora_ids = list_folders_pathlib(args.lora_adapters_path)
 
-  if lora_config is not None:
-    max_logging.log(f"Lora config = {lora_config}")
+    for lora_id in lora_ids:
+      lora_path = args.lora_adapters_path + "/" + lora_id
+      lora_config_path = lora_path  + "/adapter_config.json"
+      with open(lora_config_path, 'r') as f:
+        lora_config = json.load(f)
 
-    jax_lora_weights = convert_lora_weights_to_jax_weights(lora_config, args.model_size)
+        if lora_config is not None:
+          lora_model_path = lora_path + "/adapter_model.bin"
+          lora_config["lora_model_path"] = lora_model_path
 
-  
-    save_jax_weights_to_checkpoint(args.maxtext_model_path + "/lora_weights", jax_lora_weights)
-    max_logging.log(f"Successfully saved lora_weights to {args.maxtext_model_path}/lora_weights.")
+          jax_lora_weights = convert_lora_weights_to_jax_weights(lora_config, args.model_size)
+
+          del lora_config["lora_model_path"]
+
+          lora_output_gcs_path = args.maxtext_model_path + "/LoRAs/" + lora_id
+
+          save_jax_weights_to_checkpoint(lora_output_gcs_path, jax_lora_weights)
+          max_utils.write_dict_to_gcs_json(lora_config, lora_output_gcs_path + "/adapter_config.json")
+
+          max_logging.log(f"Successfully saved lora_weights to {lora_output_gcs_path}.")
 
 

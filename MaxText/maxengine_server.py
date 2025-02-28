@@ -39,9 +39,6 @@ def main(config):
   devices = server_lib.get_devices()
   server_config = maxengine_config.get_server_config(config.inference_server, config)
 
-  print("AMANGU --> Configs")
-  print(config)
-
   metrics_server_config: config_lib.MetricsServerConfig | None = None
   if config.prometheus_port != 0:
     metrics_server_config = config_lib.MetricsServerConfig(port=config.prometheus_port)

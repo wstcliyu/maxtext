@@ -32,12 +32,11 @@ normalization_layer_epsilon: 1.e-05
 # e.g. gs://my-base-output-directory/my-previous-run-name/checkpoints/items/NUMBER or NUMBER/items
 load_parameters_path: ""
 
-# Load adapters like LoRA from a catalog file at a given path
-adapters_catalog_file_path: ""
-
-# LoRA parameters path
-lora_parameters_base_path: ""
-lora_config_path: ""
+# LoRA adapter support configs
+lora_adapters_path: ""
+lora_dir: "LoRAs/"
+lora_config_file_name: "adapter_config.json"
+base_dir: "base/"
 
 # Loads a full checkpoint including optimizer state and step count from a specific directory
 # e.g. gs://my-base-output-directory/my-previous-run-name/checkpoints/items/NUMBER or NUMBER/items
