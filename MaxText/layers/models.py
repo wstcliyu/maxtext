@@ -432,7 +432,6 @@ class Decoder(nn.Module):
               model_mode,
               page_state=page_state,
           )
-<<<<<<< HEAD
           num_moe_layers = cfg.num_decoder_layers - cfg.first_num_dense_layers
           y, _ = self.scan_decoder_layers(cfg, moe_layer, num_moe_layers, "moe_layers", mesh)(
               y,
@@ -440,6 +439,7 @@ class Decoder(nn.Module):
               decoder_positions,
               deterministic,
               model_mode,
+              page_state=page_state,
           )
         else:
           RemattedBlockLayer = RemattedBlockLayers[0]
@@ -449,6 +449,7 @@ class Decoder(nn.Module):
               decoder_positions,
               deterministic,
               model_mode,
+              page_state=page_state,
           )
       else:
         if cfg.decoder_block == "deepseek":
@@ -478,9 +479,6 @@ class Decoder(nn.Module):
                 deterministic,
                 model_mode,
             )
-
-=======
->>>>>>> 7f0b0fc6 (fix)
     y = self.get_norm_layer()(
         dtype=cfg.dtype,
         weight_dtype=cfg.weight_dtype,
