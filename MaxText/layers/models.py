@@ -17,6 +17,7 @@
 # pylint: disable=no-name-in-module
 
 from typing import Any, Callable, Optional
+import uuid
 
 
 from flax import linen as nn
@@ -25,6 +26,7 @@ import jax
 import jax.numpy as jnp
 from jax.ad_checkpoint import checkpoint_name
 import common_types
+import page_managers
 from layers import attentions
 from layers import embeddings
 from layers import linears
@@ -427,6 +429,7 @@ class Decoder(nn.Module):
               decoder_positions,
               deterministic,
               model_mode,
+              page_state=page_state,
           )
           num_moe_layers = cfg.num_decoder_layers - cfg.first_num_dense_layers
           y, _ = self.scan_decoder_layers(cfg, moe_layer, num_moe_layers, "moe_layers", mesh)(
@@ -474,6 +477,16 @@ class Decoder(nn.Module):
                 model_mode,
             )
 
+  @nn.compact
+  def __call__(
+      self,
+      decoder_input_tokens,
+      decoder_positions,
+      decoder_segment_ids=None,
+      deterministic=False,
+      model_mode=common_types.MODEL_MODE_TRAIN,
+      page_state: Optional[page_managers.PageState] = None,
+  ):
     y = self.get_norm_layer()(
         dtype=cfg.dtype,
         weight_dtype=cfg.weight_dtype,
@@ -526,6 +539,10 @@ class Transformer(nn.Module):
 
     cfg = self.config
     mesh = self.mesh
+    if self.config.attention == "paged":
+      assert self.config.max_target_length % self.config.tokens_per_page == 0
+      assert self.config.max_prefill_predict_length % self.config.tokens_per_page == 0
+
     self.shared_embedding = Embed(
         num_embeddings=cfg.vocab_size,
         features=cfg.emb_dim,
@@ -538,6 +555,16 @@ class Transformer(nn.Module):
 
     self.decoder = Decoder(config=cfg, shared_embedding=self.shared_embedding, mesh=mesh, quant=self.quant)
 
+    if self.config.attention == "paged":
+      self.page_manager = page_managers.PageManager(
+          num_pages=self.config.num_pages,
+          tokens_per_page=self.config.tokens_per_page,
+          slots=int(self.config.per_device_batch_size * jax.device_count()),
+          max_target_length=self.config.max_target_length,
+          max_prefill_predict_length=self.config.max_prefill_predict_length,
+          max_pages_per_slot=self.config.max_target_length // self.config.tokens_per_page,
+      )
+
   def __call__(
       self,
       decoder_input_tokens,
@@ -545,6 +572,9 @@ class Transformer(nn.Module):
       decoder_segment_ids=None,
       enable_dropout=True,
       model_mode=common_types.MODEL_MODE_TRAIN,
+      slot: Optional[int] = None,
+      true_length: Optional[int] = None,
+      request_id: uuid.UUID = None,
   ):
     """Applies Transformer decoder-branch on encoded-input and target."""
 
@@ -554,11 +584,42 @@ class Transformer(nn.Module):
           f" which is always {common_types.DECODING_ACTIVE_SEQUENCE_INDICATOR}."
       )
 
+    page_state = None
+    if self.config.attention == "paged":
+      if model_mode == common_types.MODEL_MODE_AUTOREGRESSIVE:
+        page_state = self.page_manager(model_mode)
+        #slot = 2
+        #def swap(arr, idx):
+          #temp = arr[0]
+          #arr = arr.at[0].set(arr[idx])
+          #arr = arr.at[idx].set(temp)
+          #return arr
+        #jax.debug.print("slot {}", slot)
+        #slot = jax.jit(first_nonzero_index)(decoder_input_tokens)
+        #page_state = page_managers.PageState(page_state.page_status, swap(page_state.page_map, slot), swap(page_state.sequence_lengths, slot), swap(page_state.num_pages_used, slot), swap(page_state.current_page, slot), swap(page_state.current_page_position, slot))
+        jax.debug.print("page_map: {}, sequence_lengths: {}, num_pages_used: {}, current_page: {}, current_page_position: {}", page_state.page_map, page_state.sequence_lengths, page_state.num_pages_used, page_state.current_page, page_state.current_page_position)
+      elif model_mode == common_types.MODEL_MODE_PREFILL:
+        page_state = self.page_manager(
+            model_mode=model_mode,
+            slot=slot,
+            true_length=true_length,
+        )
+        jax.debug.print("prefill page_map: {}, sequence_lengths: {}, num_pages_used: {}, current_page: {}, current_page_position: {}", page_state.page_map, page_state.sequence_lengths, page_state.num_pages_used, page_state.current_page, page_state.current_page_position)
+      elif model_mode == common_types.MODEL_MODE_INSERT:
+        page_state = self.page_manager(
+            model_mode=model_mode,
+            slot=slot,
+            true_length=true_length,
+        )
+        return
     logits = self.decoder(
         decoder_input_tokens=decoder_input_tokens,
         decoder_positions=decoder_positions,
         decoder_segment_ids=decoder_segment_ids,
         deterministic=not enable_dropout,
         model_mode=model_mode,
+        page_state=page_state,
     )
+    if model_mode == common_types.MODEL_MODE_AUTOREGRESSIVE:
+      jax.debug.print("logits in decoder: {}, logits_shape: {}, decoder_input_tokens: {}, decoder_positions: {}, decoder_segment_ids: {}", logits, logits.shape, decoder_input_tokens, decoder_positions, decoder_segment_ids)
     return logits
