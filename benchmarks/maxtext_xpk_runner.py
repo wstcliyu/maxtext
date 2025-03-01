@@ -511,8 +511,9 @@ def on_device_benchmark_runner(
 # Run maxtext_xpk_runner.py as a script for executing multiple workloads pythonically!
 def main() -> int:
   # Variables to configure:
-  output_bucket = 'gs://DIR'
-  base_docker_image = 'gcr.io/tpu-prod-env-multipod/mazumdera_runner3' #_DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
+  output_bucket = 'gs://mazumdera-test-bucket-us-east5/maxtext/contextpara'
+  # base_docker_image = 'gcr.io/tpu-prod-env-multipod/mazumdera_runner3' #_DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
+  base_docker_image = _DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
 
   # Set up the clusters to run workloads on!
   v5e_cluster_config = XpkClusterConfig(
@@ -543,8 +544,8 @@ def main() -> int:
     # model_configs.llama2_70b_4096_sc,
     # model_configs.default_128
     model_configs.llama3_1_70b_131072,
-    model_configs.llama3_1_70b_131072_1,
-    model_configs.llama3_1_70b_131072_2
+    # model_configs.llama3_1_70b_131072_1,
+    # model_configs.llama3_1_70b_131072_2
   ]
 
   # Loop possibilities:

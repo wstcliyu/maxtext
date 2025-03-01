@@ -1226,10 +1226,13 @@ llama3_1_70b_131072 = _add_to_model_dictionary(
         "steps": 30,
     },
     xla_flags=(
+        # xla_flags_library.DENSE_VMEM_LIMIT_FLAG
+        # + xla_flags_library.LAYOUT_FOR_ALL_REDUCE_SCATTER
+        # + xla_flags_library.DATA_PARALLEL_OVERLAP
+        # + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
+        # + xla_flags_library.HOST_OFFLOAD_FLAGS
         xla_flags_library.DENSE_VMEM_LIMIT_FLAG
-        + xla_flags_library.LAYOUT_FOR_ALL_REDUCE_SCATTER
-        + xla_flags_library.DATA_PARALLEL_OVERLAP
-        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_ALL_GATHER
+        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
         + xla_flags_library.HOST_OFFLOAD_FLAGS
     ),
   )
@@ -1278,7 +1281,7 @@ llama3_1_70b_131072_1 = _add_to_model_dictionary(
         xla_flags_library.DENSE_VMEM_LIMIT_FLAG
         + xla_flags_library.LAYOUT_FOR_ALL_REDUCE_SCATTER
         + xla_flags_library.DATA_PARALLEL_OVERLAP
-        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_ALL_GATHER
+        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
         + xla_flags_library.HOST_OFFLOAD_FLAGS
     ),
   )
@@ -1326,7 +1329,7 @@ llama3_1_70b_131072_2 = _add_to_model_dictionary(
         xla_flags_library.DENSE_VMEM_LIMIT_FLAG
         + xla_flags_library.LAYOUT_FOR_ALL_REDUCE_SCATTER
         + xla_flags_library.DATA_PARALLEL_OVERLAP
-        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_ALL_GATHER
+        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
         + xla_flags_library.HOST_OFFLOAD_FLAGS
     ),
   )
