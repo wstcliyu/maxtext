@@ -199,6 +199,7 @@ def _hf_to_maxtext_mapping(layer_idx: int = -1, expert_idx: int = -1) -> dict:
       f"model.layers.{layer_idx}.self_attn.k_proj.weight": f"layers.{layer_idx}.attention.wk.weight",
       f"model.layers.{layer_idx}.self_attn.v_proj.weight": f"layers.{layer_idx}.attention.wv.weight",
       f"model.layers.{layer_idx}.self_attn.o_proj.weight": f"layers.{layer_idx}.attention.wo.weight",
+      f"model.layers.{layer_idx}.self_attn.rotary_emb.inv_freq": f"layers.{layer_idx}.attention.rotary_emb.inv_freq",
       # MOE model
       f"model.layers.{layer_idx}.block_sparse_moe.gate.weight": f"layers.{layer_idx}.feed_forward.gate.weight",
       f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.w1.weight": f"layers.{layer_idx}.feed_forward.experts.{expert_idx}.w1.weight",
@@ -264,30 +265,30 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
   lora_chkpt_vars = _HFNamespaceMapper(lora_chkpt_vars)
 
   jax_weights_lora = {
-    "decoder": {
-        "layers": {
-            "mlp": {
-                "wi_0": {
-                    "lora_a.kernel": None,
-                    "lora_b.kernel": None,
-                },
-                "wi_1": {
-                    "lora_a.kernel": None,
-                    "lora_b.kernel": None,
-                },
-                "wo": {
-                    "lora_a.kernel": None,
-                    "lora_b.kernel": None,
-                },
-            },
-            "pre_self_attention_layer_norm": {"scale": None},
-            "post_self_attention_layer_norm": {"scale": None},
-            "self_attention": {},
-        },
-        "decoder_norm": {"scale": None},
-        "logits_dense": {"kernel": None},
-    },
-    "token_embedder": {"embedding": None},
+      "decoder": {
+          "layers": {
+              "mlp": {
+                  "wi_0": {
+                      "lora_a.kernel": None,
+                      "lora_b.kernel": None,
+                  },
+                  "wi_1": {
+                      "lora_a.kernel": None,
+                      "lora_b.kernel": None,
+                  },
+                  "wo": {
+                      "lora_a.kernel": None,
+                      "lora_b.kernel": None,
+                  },
+              },
+              "pre_self_attention_layer_norm": {"scale": None},
+              "post_self_attention_layer_norm": {"scale": None},
+              "self_attention": {},
+          },
+          "decoder_norm": {"scale": None},
+          "logits_dense": {"kernel": None},
+      },
+      "token_embedder": {"embedding": None},
   }
 
   # self attention ###############################################
@@ -325,7 +326,7 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         if self_attention_lora["query"]["lora_a.kernel"] is None:
           self_attention_lora["query"]["lora_a.kernel"] = np.zeros(stack_shape + lora_A_q.shape, dtype=np.float16)
           self_attention_lora["query"]["lora_b.kernel"] = np.zeros(stack_shape + lora_B_q.shape, dtype=np.float16)
-        
+
         self_attention_lora["query"]["lora_a.kernel"][layer_idx, ...] = lora_A_q
         self_attention_lora["query"]["lora_b.kernel"][layer_idx, ...] = lora_B_q
 
@@ -338,7 +339,7 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         if self_attention_lora["key"]["lora_a.kernel"] is None:
           self_attention_lora["key"]["lora_a.kernel"] = np.zeros(stack_shape + lora_A_k.shape, dtype=np.float16)
           self_attention_lora["key"]["lora_b.kernel"] = np.zeros(stack_shape + lora_B_k.shape, dtype=np.float16)
-        
+
         self_attention_lora["key"]["lora_a.kernel"][layer_idx, ...] = lora_A_k
         self_attention_lora["key"]["lora_b.kernel"][layer_idx, ...] = lora_B_k
 
@@ -351,7 +352,7 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         if self_attention_lora["value"]["lora_a.kernel"] is None:
           self_attention_lora["value"]["lora_a.kernel"] = np.zeros(stack_shape + lora_A_v.shape, dtype=np.float16)
           self_attention_lora["value"]["lora_b.kernel"] = np.zeros(stack_shape + lora_B_v.shape, dtype=np.float16)
-        
+
         self_attention_lora["value"]["lora_a.kernel"][layer_idx, ...] = lora_A_v
         self_attention_lora["value"]["lora_b.kernel"][layer_idx, ...] = lora_B_v
 
@@ -365,25 +366,37 @@ def convert_lora_weights_to_jax_weights(lora_config, model_size):
         if self_attention_lora["out"]["lora_a.kernel"] is None:
           self_attention_lora["out"]["lora_a.kernel"] = np.zeros(stack_shape + lora_A_o.shape, dtype=np.float16)
           self_attention_lora["out"]["lora_b.kernel"] = np.zeros(stack_shape + lora_B_o.shape, dtype=np.float16)
-        
+
         self_attention_lora["out"]["lora_a.kernel"][layer_idx, ...] = lora_A_o
         self_attention_lora["out"]["lora_b.kernel"][layer_idx, ...] = lora_B_o
 
   if self_attention_lora["query"]["lora_a.kernel"] is not None:
-      self_attention_lora["query"]["lora_a.kernel"] = np.transpose(self_attention_lora["query"]["lora_a.kernel"], axes=(1, 0, 2))
-      self_attention_lora["query"]["lora_b.kernel"] = np.transpose(self_attention_lora["query"]["lora_b.kernel"], axes=(1, 0, 2, 3))
+    self_attention_lora["query"]["lora_a.kernel"] = np.transpose(
+        self_attention_lora["query"]["lora_a.kernel"], axes=(1, 0, 2)
+    )
+    self_attention_lora["query"]["lora_b.kernel"] = np.transpose(
+        self_attention_lora["query"]["lora_b.kernel"], axes=(1, 0, 2, 3)
+    )
 
   if self_attention_lora["key"]["lora_a.kernel"] is not None:
-      self_attention_lora["key"]["lora_a.kernel"] = np.transpose(self_attention_lora["key"]["lora_a.kernel"], axes=(1, 0, 2))
-      self_attention_lora["key"]["lora_b.kernel"] = np.transpose(self_attention_lora["key"]["lora_b.kernel"], axes=(1, 0, 2, 3))
+    self_attention_lora["key"]["lora_a.kernel"] = np.transpose(self_attention_lora["key"]["lora_a.kernel"], axes=(1, 0, 2))
+    self_attention_lora["key"]["lora_b.kernel"] = np.transpose(
+        self_attention_lora["key"]["lora_b.kernel"], axes=(1, 0, 2, 3)
+    )
 
   if self_attention_lora["value"]["lora_a.kernel"] is not None:
-      self_attention_lora["value"]["lora_a.kernel"] = np.transpose(self_attention_lora["value"]["lora_a.kernel"], axes=(1, 0, 2))
-      self_attention_lora["value"]["lora_b.kernel"] = np.transpose(self_attention_lora["value"]["lora_b.kernel"], axes=(1, 0, 2, 3))
+    self_attention_lora["value"]["lora_a.kernel"] = np.transpose(
+        self_attention_lora["value"]["lora_a.kernel"], axes=(1, 0, 2)
+    )
+    self_attention_lora["value"]["lora_b.kernel"] = np.transpose(
+        self_attention_lora["value"]["lora_b.kernel"], axes=(1, 0, 2, 3)
+    )
 
   if self_attention_lora["out"]["lora_a.kernel"] is not None:
-      self_attention_lora["out"]["lora_a.kernel"] = np.transpose(self_attention_lora["out"]["lora_a.kernel"], axes=(2, 0, 3, 1))
-      self_attention_lora["out"]["lora_b.kernel"] = np.transpose(self_attention_lora["out"]["lora_b.kernel"], axes=(1, 0, 2))
+    self_attention_lora["out"]["lora_a.kernel"] = np.transpose(
+        self_attention_lora["out"]["lora_a.kernel"], axes=(2, 0, 3, 1)
+    )
+    self_attention_lora["out"]["lora_b.kernel"] = np.transpose(self_attention_lora["out"]["lora_b.kernel"], axes=(1, 0, 2))
 
   # Not sure if I need to scale the lora query weights by dividing it by np.sqrt(head_dim). Validate it later.
 
@@ -710,7 +723,6 @@ def _convert_pytorch_to_jax_weights(base_model_path, model_size, model_params, m
       "out": {"kernel": None},
   }
 
-
   for layer_idx in tqdm(range(base_num_decoder_layers), desc="layers", leave=False):
     wq = np.concatenate(
         [var[f"layers.{layer_idx}.attention.wq.weight"].type(torch.float16).numpy() for var in chkpt_vars], axis=0
@@ -996,7 +1008,7 @@ def list_folders_pathlib(directory):
   folders = []
   for item in dir_path.iterdir():
     if item.is_dir():
-      folders.append(item.name)   # Append only the name
+      folders.append(item.name)  # Append only the name
 
   return folders
 
@@ -1021,9 +1033,10 @@ if __name__ == "__main__":
     base_weights_path += "/base"
 
   save_jax_weights_to_checkpoint(
-      base_weights_path, convert_to_jax_weights(args.base_model_path, args.model_size, args.huggingface_checkpoint))
+      base_weights_path, convert_to_jax_weights(args.base_model_path, args.model_size, args.huggingface_checkpoint)
+  )
   max_logging.log(f"Successfully saved base_weights to {base_weights_path}.")
-  
+
   lora_config = None
   if args.lora_adapters_path:
     max_logging.log(f"LoRA Adapters Path = {args.lora_adapters_path}")
@@ -1035,8 +1048,8 @@ if __name__ == "__main__":
 
     for lora_id in lora_ids:
       lora_path = args.lora_adapters_path + "/" + lora_id
-      lora_config_path = lora_path  + "/adapter_config.json"
-      with open(lora_config_path, 'r') as f:
+      lora_config_path = lora_path + "/adapter_config.json"
+      with open(lora_config_path, "r") as f:
         lora_config = json.load(f)
 
         if lora_config is not None:
@@ -1053,4 +1066,3 @@ if __name__ == "__main__":
           max_utils.write_dict_to_gcs_json(lora_config, lora_output_gcs_path + "/adapter_config.json")
 
           max_logging.log(f"Successfully saved lora_weights to {lora_output_gcs_path}.")
-

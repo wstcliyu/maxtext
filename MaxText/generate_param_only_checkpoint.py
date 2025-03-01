@@ -101,19 +101,20 @@ def _read_load_save_lora_checkpoints(config, mesh):
 
   lora_adapters = max_utils.gcs_list_directories(config.lora_adapters_path)
   for lora_id in lora_adapters:
-    lora_checkpoint_dir = config.checkpoint_dir + config.lora_dir + lora_id + "/"
-    lora_adapter_path = config.lora_adapters_path + "/" + lora_id + "/"
+    lora_checkpoint_dir = f"{config.checkpoint_dir}{config.lora_dir}{lora_id}/"
+    lora_adapter_path = f"{config.lora_adapters_path}/{lora_id}/"
 
     # Create a checkpoint manager to save decode checkpoint at lora_checkpoint_dir
     checkpoint_manager = checkpointing.create_orbax_checkpoint_manager(
-      lora_checkpoint_dir,
-      config.enable_checkpointing,
-      config.async_checkpointing,
-      config.checkpoint_period,
+        lora_checkpoint_dir,
+        config.enable_checkpointing,
+        config.async_checkpointing,
+        config.checkpoint_period,
     )
 
     lora_config, lora_state, lora_state_annotations = max_utils.setup_initial_lora_state(
-        model, None, tx, config, rng, mesh, checkpoint_manager, lora_adapter_path)
+        model, None, tx, config, rng, mesh, checkpoint_manager, lora_adapter_path
+    )
 
     _possibly_unroll_params(config, lora_state, lora_state_annotations, mesh)
 
@@ -176,7 +177,7 @@ def generate_decode_checkpoint(config):
   max_logging.log(f"Save decode checkpoint at: {base_checkpoint_dir}")
   _save_decode_checkpoint(config, training_state, checkpoint_manager)
   max_logging.log(f"Successfully generated decode checkpoint at: {base_checkpoint_dir}0/items")
- 
+
   if config.lora_adapters_path:
     _read_load_save_lora_checkpoints(config, mesh)
 

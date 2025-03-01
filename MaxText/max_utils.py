@@ -24,6 +24,7 @@ import checkpointing
 import common_types
 import functools
 import time
+import json
 import optax
 import os
 import psutil
@@ -235,11 +236,11 @@ def gcs_list_directories(directory_path):
   bucket = storage_client.bucket(bucket_name)
 
   # Ensures the prefix has a trailing slash to simulate a directory
-  if not directory_prefix.endswith('/'):
-    directory_prefix += '/'
+  if not directory_prefix.endswith("/"):
+    directory_prefix += "/"
 
   # Use list_blobs with a delimiter to get "directories"
-  delimiter = '/'
+  delimiter = "/"
   blobs = bucket.list_blobs(prefix=directory_prefix, delimiter=delimiter)
 
   directories = []
@@ -795,7 +796,7 @@ def init_initial_state(model, tx, config, is_training, key):
 def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
   """
   Apply the LoRA weights on the base weights of the model using formula:
-                W_new = W + BA, where 
+                W_new = W + BA, where
                     W_new is the new weights with LoRA applied
                     W is the base model weights
                     B is lora_b adapter weights
@@ -810,24 +811,24 @@ def apply_lora_on_base_params(base_params, lora_params, lora_scale_factor=1.0):
     if lora_a is not None and lora_b is not None:
       return base_weight + jnp.einsum("br,rnd->bnd", lora_b, lora_a) * lora_scale_factor
     else:
-      return base_weight        # Keep the base weight if no Lora update
+      return base_weight  # Keep the base weight if no Lora update
 
   def apply_lora_recursively(base_params, lora_params, module_name):
-      for name, param in lora_params.items():
-        if isinstance(param, dict):
-          apply_lora_recursively(base_params[name], param, f"{module_name}.{name}")
-        elif param is not None:
-          if name not in ["lora_a.kernel", "lora_b.kernel"]:
-            raise ValueError(f"Unexpected non-lora specific weights ({module_name}.{name}) found in the lora_params")
- 
-          lora_b = lora_params["lora_a.kernel"]
-          lora_a = lora_params["lora_b.kernel"]
+    for name, param in lora_params.items():
+      if isinstance(param, dict):
+        apply_lora_recursively(base_params[name], param, f"{module_name}.{name}")
+      elif param is not None:
+        if name not in ["lora_a.kernel", "lora_b.kernel"]:
+          raise ValueError(f"Unexpected non-lora specific weights ({module_name}.{name}) found in the lora_params")
 
-          base = base_params["kernel"]
+        lora_b = lora_params["lora_a.kernel"]
+        lora_a = lora_params["lora_b.kernel"]
 
-          base_params["kernel"] = lora_update_or_base(base, lora_a, lora_b)
-          break
-          
+        base = base_params["kernel"]
+
+        base_params["kernel"] = lora_update_or_base(base, lora_a, lora_b)
+        break
+
   apply_lora_recursively(base_params, lora_params, "")
 
 
@@ -862,10 +863,7 @@ def setup_decode_state(model, config, rng, mesh, checkpoint_manager):
   return state, state_mesh_annotations
 
 
-def load_adapter(config,
-                 base_abstract_state_params,
-                 adapter_config_path,
-                 adapter_weights_path):
+def load_adapter(config, base_abstract_state_params, adapter_config_path, adapter_weights_path):
   """
   Load the LoRA weights into a PyTree and return it.
   """
@@ -876,7 +874,7 @@ def load_adapter(config,
     if adapter_config_path.startswith("gs://"):
       lora_config = read_json_from_gcs(adapter_config_path)
     else:
-      with open(adapter_config_path, 'r') as f:
+      with open(adapter_config_path, "r") as f:
         lora_config = json.load(f)
 
     if lora_config is None:
@@ -982,16 +980,7 @@ def setup_initial_state(
   return state, state_mesh_annotations, state_mesh_shardings, data_iterator
 
 
-def setup_initial_lora_state(
-    model,
-    data_iterator,
-    tx,
-    config,
-    rng,
-    mesh,
-    checkpoint_manager,
-    lora_adapter_path
-):
+def setup_initial_lora_state(model, data_iterator, tx, config, rng, mesh, checkpoint_manager, lora_adapter_path):
   """We initialize the model and optimizer state, and optionally load from a
   checkpoint as necessary.
 
@@ -1235,11 +1224,11 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
     inferred sharding information.
   """
   other_lora_format_to_jax_format = {
-          "q_proj": "self_attention.query",
-          "k_proj": "self_attention.key",
-          "v_proj": "self_attention.value",
-          "o_proj": "self_attention.out",
-          }
+      "q_proj": "self_attention.query",
+      "k_proj": "self_attention.key",
+      "v_proj": "self_attention.value",
+      "o_proj": "self_attention.out",
+  }
 
   lora_target_modules = lora_config["target_modules"]
   lora_target_modules = [other_lora_format_to_jax_format.get(s, s) for s in lora_target_modules]
@@ -1252,7 +1241,9 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
     base_array_dimensions = len(base_array_shape)
 
     if base_array_dimensions > 4:
-      raise ValueError(f"Encountered unexpected shape={base_array_shape} of array in base params. Array dimensions > 4 not supported.")
+      raise ValueError(
+          f"Encountered unexpected shape={base_array_shape} of array in base params. Array dimensions > 4 not supported."
+      )
 
     if lora_module in ["self_attention.query", "self_attention.key", "self_attention.value"]:
       lora_a_shape = base_array_shape[:-2] + (lora_rank,)
@@ -1265,19 +1256,18 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
         lora_b_shape = (lora_rank, base_array_shape[-1])
     else:
       raise ValueError(f"Unsupported lora_module={lora_module}")
-    
+
     return lora_a_shape, lora_b_shape
 
-
   def get_lora_param_sharding(base_param_sharding, lora_module):
-    if base_param_sharding is None:         # Base parameter is replicated
-      return None, None         # Replicate LoRA parameters as well
+    if base_param_sharding is None:  # Base parameter is replicated
+      return None, None  # Replicate LoRA parameters as well
 
     base_sharding_pspec_size = len(base_param_sharding.spec)
 
     if base_sharding_pspec_size > 4:
       raise ValueError(f"Encountered unexpected size of PartitionSpec in sharding. Size > 4 is not supported")
-    
+
     base_mesh = base_param_sharding.mesh
     base_memory_kind = base_param_sharding.memory_kind
     base_pspec = base_param_sharding.spec
@@ -1303,12 +1293,11 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
     lora_b_sharding = jax.sharding.NamedSharding(mesh=base_mesh, spec=lora_b_pspec, memory_kind=base_memory_kind)
 
     return lora_a_sharding, lora_b_sharding
-    
 
   def module_is_target_module(module, target_modules):
-    """Checks if any of the target_modules is part of the current module which represents an array. 
+    """Checks if any of the target_modules is part of the current module which represents an array.
 
-    Args: 
+    Args:
       module: A string where nested dictionary keys are concatenated to make a path of the internal most kernel/scale arrays.
       target_modules: A list of strings which represents the target_modules on which lora is applied.
 
@@ -1320,7 +1309,6 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
         return target_module
     return None
 
-
   def add_lora_params(lora_params, module_name, base_params, lora_rank, lora_target_modules):
     for name, param in base_params.items():
       if isinstance(param, dict):
@@ -1329,7 +1317,7 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
       else:
         if name not in ["kernel", "scale", "embedding"]:
           raise ValueError(f"Unexpected key={name} exists in the abstract params of base model.")
-        
+
         if not isinstance(param, jax.ShapeDtypeStruct):
           raise ValueError(f"Unexpected type found in the abstract params of the base model.")
 
@@ -1341,39 +1329,26 @@ def get_lora_abstract_state(base_abstract_params, lora_config):
         if target_module is not None:
           lora_a_shape, lora_b_shape = get_lora_param_shape(param.shape, lora_rank, target_module)
           base_dtype = param.dtype
-          lora_a_sharding, lora_b_sharding = get_lora_param_sharding(param.sharding,target_module)
+          lora_a_sharding, lora_b_sharding = get_lora_param_sharding(param.sharding, target_module)
 
-          lora_params[lora_a_key] = jax.ShapeDtypeStruct(
-                  shape=lora_a_shape,
-                  dtype=base_dtype,
-                  sharding=lora_a_sharding)
+          lora_params[lora_a_key] = jax.ShapeDtypeStruct(shape=lora_a_shape, dtype=base_dtype, sharding=lora_a_sharding)
 
-          lora_params[lora_b_key] = jax.ShapeDtypeStruct(
-                  shape=lora_b_shape,
-                  dtype=base_dtype,
-                  sharding=lora_b_sharding)
+          lora_params[lora_b_key] = jax.ShapeDtypeStruct(shape=lora_b_shape, dtype=base_dtype, sharding=lora_b_sharding)
         else:
           lora_params[name] = None
 
   def get_lora_annotations(lora_abstract_params):
     return jax.tree_util.tree_map(lambda x: x.sharding.spec, lora_abstract_params)
 
-
   add_lora_params(lora_abstract_params, "", base_abstract_params, lora_rank, lora_target_modules)
 
-  unboxed_abstract_lora_state =  train_state.TrainState(
-          step=0, 
-          apply_fn=None,
-          params=lora_abstract_params,
-          tx=None,
-          opt_state={})
+  unboxed_abstract_lora_state = train_state.TrainState(
+      step=0, apply_fn=None, params=lora_abstract_params, tx=None, opt_state={}
+  )
 
-  lora_state_mesh_annotations =  train_state.TrainState(
-          step=0, 
-          apply_fn=None,
-          params=get_lora_annotations(lora_abstract_params),
-          tx=None,
-          opt_state={})
+  lora_state_mesh_annotations = train_state.TrainState(
+      step=0, apply_fn=None, params=get_lora_annotations(lora_abstract_params), tx=None, opt_state={}
+  )
 
   return unboxed_abstract_lora_state, lora_state_mesh_annotations
 
