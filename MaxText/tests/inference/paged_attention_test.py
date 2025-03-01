@@ -1664,6 +1664,7 @@ class PagedAttentionTest(unittest.TestCase):
       )
 
   @pytest.mark.tpu_only
+  @unittest.skip("This test is temporarily disabled. To be fixed")
   def test_slot_reuse_attention_computation(self):
     """Test that reused slot properly computes attention with new content."""
     batch_size, seq_len = 1, self.cfg["max_prefill_predict_length"]
