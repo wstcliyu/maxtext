@@ -14,6 +14,8 @@
 
 """Page Managers for implementing paged attention in MaxText.
 
+WARNING: THIS FILE IS A WORK IN PROGRESS.
+
 This module provides the PageManager class and associated PageState dataclass for
 managing the paged attention mechanism. The paging system allows efficient handling
 of variable-length sequences by dividing the attention context into fixed-size pages,
@@ -22,18 +24,15 @@ similar to virtual memory systems.
 
 from typing import Optional, Tuple
 
-from flax import linen as nn
-from flax import struct
+import common_types
 import jax
 import jax.numpy as jnp
-
-import common_types
+from flax import linen as nn
+from flax import struct
 
 Array = common_types.Array
 DType = common_types.DType
 AxisNames = common_types.AxisNames
-
-# pylint: disable=too-many-positional-arguments
 
 
 @struct.dataclass
@@ -93,26 +92,38 @@ class PageManager(nn.Module):
         - current_page_position: Position within current pages
     """
     page_status_var = self.variable(
-        "cache", "page_status", nn.with_logical_partitioning(jnp.zeros, ("num_pages",)), (self.num_pages,), jnp.int32
+        "cache", "page_status",
+        nn.with_logical_partitioning(jnp.zeros, ("num_pages",)),
+        (self.num_pages,), jnp.int32
     )
     page_map_var = self.variable(
         "cache",
         "page_map",
-        nn.with_logical_partitioning(jnp.zeros, ("slots", "max_pages_per_slot")),
+        nn.with_logical_partitioning(
+            jnp.zeros, ("slots", "max_pages_per_slot")
+        ),
         (self.slots, self.max_pages_per_slot),
         jnp.int32,
     )
     sequence_lengths_var = self.variable(
-        "cache", "sequence_lengths", nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,), jnp.int32
+        "cache", "sequence_lengths",
+        nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,),
+        jnp.int32
     )
     num_pages_used_var = self.variable(
-        "cache", "num_pages_used", nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,), jnp.int32
+        "cache", "num_pages_used",
+        nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,),
+        jnp.int32
     )
     current_page_var = self.variable(
-        "cache", "current_page", nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,), jnp.int32
+        "cache", "current_page",
+        nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,),
+        jnp.int32
     )
     current_page_position_var = self.variable(
-        "cache", "current_page_position", nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,), jnp.int32
+        "cache", "current_page_position",
+        nn.with_logical_partitioning(jnp.zeros, ("slots",)), (self.slots,),
+        jnp.int32
     )
 
     return (
@@ -165,7 +176,9 @@ class PageManager(nn.Module):
       page_map = page_map.at[slot, i].set(0)
       return page_map, page_status
 
-    page_map, page_status = jax.lax.fori_loop(0, num_pages_used[slot], _release_page, (page_map, page_status))
+    page_map, page_status = jax.lax.fori_loop(
+        0, num_pages_used[slot], _release_page, (page_map, page_status)
+    )
 
     sequence_lengths = sequence_lengths.at[slot].set(0)
     num_pages_used = num_pages_used.at[slot].set(0)
@@ -241,8 +254,12 @@ class PageManager(nn.Module):
     current_page = current_page_var.value
     current_page_position = current_page_position_var.value
 
-    prefill_slot_num_pages = jnp.ceil(true_length / self.tokens_per_page).astype(jnp.int32)
-    prefill_slot_page_slice_idx = jnp.where(true_length == 0, 0, (true_length - 1) % self.tokens_per_page)
+    prefill_slot_num_pages = jnp.ceil(true_length/self.tokens_per_page).astype(
+        jnp.int32
+    )
+    prefill_slot_page_slice_idx = jnp.where(
+        true_length == 0, 0, (true_length - 1)%self.tokens_per_page
+    )
 
     def _reserve_page(i, state):
       slot, page_map, page_status, current_page = state
@@ -253,12 +270,14 @@ class PageManager(nn.Module):
       return slot, page_map, page_status, current_page
 
     _, page_map, page_status, current_page = jax.lax.fori_loop(
-        0, prefill_slot_num_pages, _reserve_page, (slot, page_map, page_status, current_page)
+        0, prefill_slot_num_pages, _reserve_page,
+        (slot, page_map, page_status, current_page)
     )
-    jax.debug.print("slot in prefill: {}", slot)
     sequence_lengths = sequence_lengths.at[slot].set(true_length)
     num_pages_used = num_pages_used.at[slot].set(prefill_slot_num_pages)
-    current_page_position = current_page_position.at[slot].set(prefill_slot_page_slice_idx)
+    current_page_position = current_page_position.at[slot].set(
+        prefill_slot_page_slice_idx
+    )
 
     page_status_var.value = page_status
     page_map_var.value = page_map
@@ -309,32 +328,40 @@ class PageManager(nn.Module):
     current_page = current_page_var.value
     current_page_position = current_page_position_var.value
 
-    sequence_lengths_step = jnp.logical_and(jnp.ones(sequence_lengths.shape, dtype=jnp.int32), sequence_lengths).astype(
+    sequence_lengths_step = jnp.logical_and(
+        jnp.ones(sequence_lengths.shape, dtype=jnp.int32), sequence_lengths
+    ).astype(
         jnp.int32
     )
 
     sequence_lengths += sequence_lengths_step
 
     current_num_pages_used = num_pages_used
-    num_pages_used = jnp.ceil(sequence_lengths / self.tokens_per_page).astype(jnp.int32)
+    num_pages_used = jnp.ceil(sequence_lengths/self.tokens_per_page).astype(
+        jnp.int32
+    )
 
-    current_page_position = jnp.where(sequence_lengths == 0, 0, (sequence_lengths - 1) % self.tokens_per_page)
+    current_page_position = jnp.where(
+        sequence_lengths == 0, 0, (sequence_lengths - 1)%self.tokens_per_page
+    )
     seq_new_page = num_pages_used - current_num_pages_used
 
     updating_slots = jnp.where((seq_new_page > 0), size=self.slots)[0]
 
     def _reserve_page(i, state):
       page_map, page_status, current_page, updating_slots = state
-      slot = jax.lax.dynamic_index_in_dim(updating_slots, i, axis=0, keepdims=False)
+      slot = jax.lax.dynamic_index_in_dim(
+          updating_slots, i, axis=0, keepdims=False
+      )
       page_idx = jnp.where((page_status[1:] == 0), size=1)[0][0] + 1
       page_status = page_status.at[page_idx].set(1)
       page_map = page_map.at[slot, num_pages_used[slot] - 1].set(page_idx)
       current_page = current_page.at[slot].set(page_idx)
-      jax.debug.print("slot_id: {}, page_idx: {}, num_pages_used: {}, current_page: {}", slot, page_idx, num_pages_used[slot], current_page.at[slot])
       return page_map, page_status, current_page, updating_slots
 
     page_map, page_status, current_page, _ = jax.lax.fori_loop(
-        0, jnp.count_nonzero(seq_new_page), _reserve_page, (page_map, page_status, current_page, updating_slots)
+        0, jnp.count_nonzero(seq_new_page), _reserve_page,
+        (page_map, page_status, current_page, updating_slots)
     )
 
     page_status_var.value = page_status
@@ -355,7 +382,8 @@ class PageManager(nn.Module):
 
   @nn.compact
   def __call__(
-      self, model_mode: Optional[str] = None, slot: Optional[int] = None, true_length: Optional[int] = None
+      self, model_mode: Optional[str] = None, slot: Optional[int] = None,
+      true_length: Optional[int] = None
   ) -> PageState:
 
     (
@@ -367,7 +395,9 @@ class PageManager(nn.Module):
         current_page_position_var,
     ) = self.init_or_get_vars()
 
-    if model_mode == common_types.MODEL_MODE_PREFILL and self.is_mutable_collection("params"):
+    if model_mode == common_types.MODEL_MODE_PREFILL and self.is_mutable_collection(
+        "params"
+    ):
       return PageState(
           page_status_var.value,
           page_map_var.value,

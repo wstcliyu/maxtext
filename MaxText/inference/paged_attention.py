@@ -12,22 +12,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-"""Paged Attention Op"""
+"""Paged Attention Op
 
+WARNING: THIS FILE IS A WORK IN PROGRESS.
+"""
 
 import functools
 from typing import Optional
 
+import common_types
+import jax.numpy as jnp
 from flax import linen as nn
 from jax.experimental import shard_map
 from jax.experimental.pallas.ops.tpu.paged_attention import paged_attention
 from jax.sharding import PartitionSpec as P
-import jax.numpy as jnp
-import common_types
+
 from inference import page_manager
 
 Mesh = common_types.Mesh
-
 
 Array = common_types.Array
 Config = common_types.Config
@@ -43,6 +45,7 @@ D_KV = common_types.D_KV
 
 shard_map = shard_map.shard_map
 
+
 class PagedAttentionOp(nn.Module):
   mesh: Mesh
   num_pages: int
@@ -57,10 +60,11 @@ class PagedAttentionOp(nn.Module):
   attn_logits_soft_cap: float | None = None
 
   query_axis_names: AxisNames = (BATCH, LENGTH, HEAD, D_KV)
-  kv_pages_axis_names: AxisNames = ("paged_kv_heads", "num_pages", "tokens_per_page", "paged_kv_head_dim_size")
+  kv_pages_axis_names: AxisNames = (
+      "paged_kv_heads", "num_pages", "tokens_per_page",
+      "paged_kv_head_dim_size")
 
   def init_or_get_kv_pages(self, model_mode: str):
-    #jax.debug.print("init_or_get_kv_pages")
     """Get paged attention op."""
     # Get existing variables if they exist
     if self.has_variable("cache", "key_pages"):
@@ -68,16 +72,19 @@ class PagedAttentionOp(nn.Module):
       value_pages_var = self.variable("cache", "value_pages")
 
       # For AR mode, if shape doesn't match, reinitialize values but not variables
-      if model_mode != common_types.MODEL_MODE_PREFILL and key_pages_var.value.shape[1] != self.num_pages:
-        kv_pages_shape = (self.num_kv_heads, self.num_pages, self.tokens_per_page, self.kv_head_dim_size)
+      if model_mode != common_types.MODEL_MODE_PREFILL and \
+          key_pages_var.value.shape[1] != self.num_pages:
+        kv_pages_shape = (
+            self.num_kv_heads, self.num_pages, self.tokens_per_page,
+            self.kv_head_dim_size)
         key_pages_var.value = jnp.zeros(kv_pages_shape, dtype=self.dtype)
         value_pages_var.value = jnp.zeros(kv_pages_shape, dtype=self.dtype)
-        #jax.debug.print("AR mode kv_pages_shape: {}", kv_pages_shape)
     else:
       # Initial creation - choose size based on mode
       num_pages = self.max_pages_per_prefill if model_mode == common_types.MODEL_MODE_PREFILL else self.num_pages
-      kv_pages_shape = (self.num_kv_heads, num_pages, self.tokens_per_page, self.kv_head_dim_size)
-      #jax.debug.print("num_pages: {}, kv_pages_shape: {}", num_pages, kv_pages_shape)
+      kv_pages_shape = (
+          self.num_kv_heads, num_pages, self.tokens_per_page,
+          self.kv_head_dim_size)
       key_pages_var = self.variable(
           "cache",
           "key_pages",
@@ -92,24 +99,27 @@ class PagedAttentionOp(nn.Module):
           kv_pages_shape,
           self.dtype,
       )
-      #jax.debug.print("key_pages_var: {}, value_pages_var: {}", key_pages_var, value_pages_var)
     # Apply logical constraints
-    key_pages_var.value = nn.with_logical_constraint(key_pages_var.value, self.kv_pages_axis_names)
-    value_pages_var.value = nn.with_logical_constraint(value_pages_var.value, self.kv_pages_axis_names)
+    key_pages_var.value = nn.with_logical_constraint(
+        key_pages_var.value, self.kv_pages_axis_names
+    )
+    value_pages_var.value = nn.with_logical_constraint(
+        value_pages_var.value, self.kv_pages_axis_names
+    )
     return key_pages_var, value_pages_var
 
-#whats the difference with the dot product
   def paged_dot_product_attention_with_max_and_sum(self, query, key, value):
     b, t, n, d = query.shape
     _, s, n_kv, _ = key.shape
-    #jax.debug.print("paged_dot_product_attention_with_max_and_sum")
-    query = jnp.reshape(query, (b, t, n_kv, n // n_kv, d))
+    query = jnp.reshape(query, (b, t, n_kv, n//n_kv, d))
 
     attn_weights = jnp.einsum("btkgd,bskd->bkgts", query, key)
 
     causal_mask = jnp.triu(jnp.ones((t, s)), k=1)
     causal_mask = jnp.reshape(causal_mask, (1, 1, 1, t, s))
-    masked_weights = jnp.where(causal_mask, jnp.full_like(attn_weights, -1e10), attn_weights)
+    masked_weights = jnp.where(
+        causal_mask, jnp.full_like(attn_weights, -1e10), attn_weights
+    )
 
     local_max = jnp.max(masked_weights, axis=-1, keepdims=True)
     local_exps = jnp.exp(masked_weights - local_max)
@@ -167,7 +177,9 @@ class PagedAttentionOp(nn.Module):
         out_specs=no_shard,
         check_rep=False,
     )
-    def wrap_paged_attention(q, k_pages, v_pages, lengths, page_indices, pages_per_compute_block):
+    def wrap_paged_attention(
+        q, k_pages, v_pages, lengths, page_indices, pages_per_compute_block
+    ):
       q = jnp.squeeze(q, axis=1)
       result = paged_attention(
           q=q,
@@ -205,14 +217,18 @@ class PagedAttentionOp(nn.Module):
               are None for autoregressive mode (handled by paged_attention kernel)
     """
     key_pages_var, value_pages_var = self.init_or_get_kv_pages(model_mode)
-    self.update(key_pages_var, value_pages_var, key, value, model_mode, page_state)
+    self.update(
+        key_pages_var, value_pages_var, key, value, model_mode, page_state
+    )
 
     if model_mode == common_types.MODEL_MODE_PREFILL:
-      # why use this
-      return self.paged_dot_product_attention_with_max_and_sum(query, key, value)
+      return self.paged_dot_product_attention_with_max_and_sum(
+          query, key, value
+      )
     elif model_mode == common_types.MODEL_MODE_AUTOREGRESSIVE:
-      #jax.debug.print("call: page status: {}, page map: {}, sequence length: {}, num pages: {}, current_page: {}, current_page_position: {}", page_state.page_status, page_state.page_map, page_state.sequence_lengths, page_state.num_pages_used, page_state.current_page, page_state.current_page_position)
-      ar_output = self.paged_attention(query, key_pages_var, value_pages_var, page_state)
+      ar_output = self.paged_attention(
+          query, key_pages_var, value_pages_var, page_state
+      )
       return ar_output, None, None
 
   def update(
@@ -228,9 +244,9 @@ class PagedAttentionOp(nn.Module):
     if model_mode == common_types.MODEL_MODE_PREFILL:
       self.update_prefill_step_pages(key_pages_var, value_pages_var, key, value)
     elif model_mode == common_types.MODEL_MODE_AUTOREGRESSIVE:
-      #jax.debug.print("update: page status: {}, page map: {}, sequence length: {}, num pages: {}, current_page: {}, current_page_position: {}", page_state.page_status, page_state.page_map, page_state.sequence_lengths, page_state.num_pages_used, page_state.current_page, page_state.current_page_position)
-      #jax.debug.print("update, page_state.page_map: {}", page_state.num_pages_used)
-      self.update_decode_step_pages(key_pages_var, value_pages_var, key, value, page_state)
+      self.update_decode_step_pages(
+          key_pages_var, value_pages_var, key, value, page_state
+      )
 
   def update_prefill_step_pages(
       self,
@@ -245,8 +261,8 @@ class PagedAttentionOp(nn.Module):
         key.shape == value.shape
     ), f"prefill_step key/value should have the same shape, but getting {key.shape=} and {value.shape=} instead"
     b, t, n_kv, d = key.shape
-    #jax.debug.print("seq_length: {}, tokens_per_page: {}", t, self.tokens_per_page)
-    assert (t % self.tokens_per_page == 0), f"seq_length {t} and  tokens_per_page {self.tokens_per_page}"
+    assert (
+        t%self.tokens_per_page == 0), f"seq_length {t} and  tokens_per_page {self.tokens_per_page}"
     assert (
         key_pages_var.value.shape == value_pages_var.value.shape
     ), f"prefill_step key/value_pages_var should have the same shape, but getting {key_pages_var.shape=} and {value_pages_var.shape=} instead"
@@ -268,15 +284,23 @@ class PagedAttentionOp(nn.Module):
     key = jnp.transpose(key, axes=(1, 0, 2))
     value = jnp.transpose(value, axes=(1, 0, 2))
 
-    key = jnp.reshape(key, shape=(n_kv, t // self.tokens_per_page, self.tokens_per_page, d))
-    value = jnp.reshape(value, shape=(n_kv, t // self.tokens_per_page, self.tokens_per_page, d))
+    key = jnp.reshape(
+        key, shape=(n_kv, t//self.tokens_per_page, self.tokens_per_page, d)
+    )
+    value = jnp.reshape(
+        value, shape=(n_kv, t//self.tokens_per_page, self.tokens_per_page, d)
+    )
 
-    key_pages_var.value = nn.with_logical_constraint(key, self.kv_pages_axis_names)
-    value_pages_var.value = nn.with_logical_constraint(value, self.kv_pages_axis_names)
+    key_pages_var.value = nn.with_logical_constraint(
+        key, self.kv_pages_axis_names
+    )
+    value_pages_var.value = nn.with_logical_constraint(
+        value, self.kv_pages_axis_names
+    )
 
-    #jax.debug.print("update_prefill_step_pages, key_pages_var: {}, value_pages_var: {}", key_pages_var, value_pages_var)
-
-  def update_decode_step_pages(self, key_pages_var, value_pages_var, key, value, page_state):
+  def update_decode_step_pages(
+      self, key_pages_var, value_pages_var, key, value, page_state
+  ):
     key_pages = key_pages_var.value
     value_pages = value_pages_var.value
 
@@ -288,16 +312,26 @@ class PagedAttentionOp(nn.Module):
     new_value = value.reshape(batch_size, kv_heads, head_dim)[:, :, :]
     new_value = jnp.transpose(new_value, (1, 0, 2))  # n_kv, b, d
 
-    broadcast_pages = jnp.tile(page_state.current_page, (kv_heads, 1))  # [n_kv, b]
-    broadcast_pos = jnp.tile(page_state.current_page_position, (kv_heads, 1))  # [n_kv, b]
+    broadcast_pages = jnp.tile(
+        page_state.current_page, (kv_heads, 1)
+    )  # [n_kv, b]
+    broadcast_pos = jnp.tile(
+        page_state.current_page_position, (kv_heads, 1)
+    )  # [n_kv, b]
     kv_indices = jnp.arange(kv_heads)[:, None]  # [n_kv, 1]
     kv_indices = jnp.tile(kv_indices, (1, batch_size))  # [n_kv, b]
 
-    key_pages_updated = key_pages.at[kv_indices, broadcast_pages, broadcast_pos].set(new_key)
-    value_pages_updated = value_pages.at[kv_indices, broadcast_pages, broadcast_pos].set(new_value)
+    key_pages_updated = key_pages.at[
+      kv_indices, broadcast_pages, broadcast_pos].set(new_key)
+    value_pages_updated = value_pages.at[
+      kv_indices, broadcast_pages, broadcast_pos].set(new_value)
 
-    key_pages_updated = nn.with_logical_constraint(key_pages_updated, self.kv_pages_axis_names)
-    value_pages_updated = nn.with_logical_constraint(value_pages_updated, self.kv_pages_axis_names)
+    key_pages_updated = nn.with_logical_constraint(
+        key_pages_updated, self.kv_pages_axis_names
+    )
+    value_pages_updated = nn.with_logical_constraint(
+        value_pages_updated, self.kv_pages_axis_names
+    )
 
     key_pages_var.value = key_pages_updated
     value_pages_var.value = value_pages_updated
