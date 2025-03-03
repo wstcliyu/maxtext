@@ -202,3 +202,6 @@ DEBUG_LOGS = {
     "TPU_MIN_LOG_LEVEL": "0",
     "TPU_VMODULE": "tpu_configuration_ops_impl=3",  # Enable TPU logging
 }
+
+Anisha =     (
+  ) + DENSE_VMEM_LIMIT_FLAG + ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR + HOST_OFFLOAD_FLAGS

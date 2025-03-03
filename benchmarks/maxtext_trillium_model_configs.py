@@ -31,7 +31,6 @@ class MaxTextModel:
   model_type: str
   tuning_params: dict[str, typing.Any]
   xla_flags: str
-  tokenizer_type: str = "sentencepiece"
 
 
 trillium_model_dict = {}
@@ -796,7 +795,6 @@ llama3_1_405b_8192_fsdp_dcn = _add_to_model_dictionary(
   MaxTextModel(
     model_name="llama3-1-405b-8192-fsdp-dcn",
     model_type="llama3.1-405b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 1,
         "ici_fsdp_parallelism": 64,
@@ -837,7 +835,6 @@ llama3_1_8b_8192 = _add_to_model_dictionary(
   MaxTextModel(
     model_name="llama3_1-8b-8192",
     model_type="llama3.1-8b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 4,
         "ici_fsdp_parallelism": -1,
@@ -883,7 +880,6 @@ llama3_1_70b_8192 = _add_to_model_dictionary(
   MaxTextModel(
     model_name="llama3_1-70b-8192",
     model_type="llama3.1-70b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 4,
         "ici_fsdp_parallelism": -1,
@@ -927,7 +923,6 @@ llama3_1_70b_129024 = _add_to_model_dictionary(
   MaxTextModel(
     model_name="llama3_1-70b-129024",
     model_type="llama3.1-70b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 0.125,
         "ici_fsdp_parallelism": -1,
@@ -1191,7 +1186,6 @@ llama3_1_70b_131072 = _add_to_model_dictionary(
     MaxTextModel(
     model_name="llama3_1_70b_131072",
     model_type="llama3.1-70b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 0.0625,
         "ici_fsdp_parallelism": -1,
@@ -1226,14 +1220,15 @@ llama3_1_70b_131072 = _add_to_model_dictionary(
         "steps": 30,
     },
     xla_flags=(
+      xla_flags_library.Anisha
         # xla_flags_library.DENSE_VMEM_LIMIT_FLAG
         # + xla_flags_library.LAYOUT_FOR_ALL_REDUCE_SCATTER
         # + xla_flags_library.DATA_PARALLEL_OVERLAP
         # + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
         # + xla_flags_library.HOST_OFFLOAD_FLAGS
-        xla_flags_library.DENSE_VMEM_LIMIT_FLAG
-        + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
-        + xla_flags_library.HOST_OFFLOAD_FLAGS
+        # xla_flags_library.DENSE_VMEM_LIMIT_FLAG
+        # + xla_flags_library.ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR
+        # + xla_flags_library.HOST_OFFLOAD_FLAGS
     ),
   )
 )
@@ -1243,7 +1238,6 @@ llama3_1_70b_131072_1 = _add_to_model_dictionary(
     MaxTextModel(
     model_name="llama3_1_70b_131072_1",
     model_type="llama3.1-70b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 0.0625,
         "ici_fsdp_parallelism": -1,
@@ -1291,7 +1285,6 @@ llama3_1_70b_131072_2 = _add_to_model_dictionary(
   MaxTextModel(
     model_name="llama3_1_70b_131072_2",
     model_type="llama3.1-70b",
-    tokenizer_type="tiktoken",
     tuning_params={
         "per_device_batch_size": 0.0625,
         "ici_fsdp_parallelism": -1,
