@@ -41,60 +41,47 @@ from train import save_checkpoint
 Transformer = models.Transformer
 
 
-def _unroll_layer_group(num_layers, training_state, training_state_annotations, mesh, config, layer_name="layers"):
-  """Helper function to unroll layers (e.g. dense or MoE) into individual layers."""
-  layers = training_state.params["params"]["decoder"].get(layer_name, None)
-  layers_annotations = training_state_annotations.params["params"]["decoder"].get(layer_name, None)
-
-  if layers is None or layers_annotations is None:
-    raise ValueError(f"Missing {layer_name} in training_state or training_state_annotations.")
-
-  def new_pspec(x):
-    return jax.sharding.PartitionSpec(*(x[0 : config.param_scan_axis] + x[config.param_scan_axis + 1 :]))
-
-  new_layer_annotation = jax.tree_util.tree_map(new_pspec, layers_annotations)
-  new_layer_sharding = jax.tree_util.tree_map(lambda x: jax.sharding.NamedSharding(mesh, x), new_layer_annotation)
-
-  for i in range(num_layers):
-
-    def slice_ith(input_layers):
-      return jax.tree_util.tree_map(lambda x: jax.numpy.take(x, i, axis=config.param_scan_axis), input_layers)
-
-    new_layer = jax.jit(slice_ith, out_shardings=new_layer_sharding)(layers)
-
-    training_state.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer
-    training_state_annotations.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer_annotation
-
-  # Remove the original layer collection
-  training_state.params["params"]["decoder"].pop(layer_name, None)
-  training_state_annotations.params["params"]["decoder"].pop(layer_name, None)
-
-  jax.tree_util.tree_map(lambda x: x.delete(), layers)
-
-
 def _possibly_unroll_params(config, training_state, training_state_annotations, mesh):
   """Unroll scanned input layers when force_unroll is set."""
   if not config.scan_layers or not config.force_unroll:
     return
 
+  def unroll_layer_group(num_layers, layer_name="layers"):
+    """Helper function to unroll layers (e.g. dense or MoE) into individual layers."""
+    layers = training_state.params["params"]["decoder"].get(layer_name, None)
+    layers_annotations = training_state_annotations.params["params"]["decoder"].get(layer_name, None)
+
+    if layers is None or layers_annotations is None:
+      raise ValueError(f"Missing {layer_name} in training_state or training_state_annotations.")
+
+    def new_pspec(x):
+      return jax.sharding.PartitionSpec(*(x[0 : config.param_scan_axis] + x[config.param_scan_axis + 1 :]))
+
+    new_layer_annotation = jax.tree_util.tree_map(new_pspec, layers_annotations)
+    new_layer_sharding = jax.tree_util.tree_map(lambda x: jax.sharding.NamedSharding(mesh, x), new_layer_annotation)
+
+    for i in range(num_layers):
+
+      def slice_ith(input_layers):
+        return jax.tree_util.tree_map(lambda x: jax.numpy.take(x, i, axis=config.param_scan_axis), input_layers)
+
+      new_layer = jax.jit(slice_ith, out_shardings=new_layer_sharding)(layers)
+
+      training_state.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer
+      training_state_annotations.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer_annotation
+
+    # Remove the original layer collection
+    del training_state.params["params"]["decoder"][layer_name]
+    del training_state_annotations.params["params"]["decoder"][layer_name]
+
+    jax.tree_util.tree_map(lambda x: x.delete(), layers)
+
   if config.decoder_block == "deepseek":
     # Unroll dense and MoE layers separately
-    _unroll_layer_group(
-        config.first_num_dense_layers, training_state, training_state_annotations, mesh, config, layer_name="dense_layers"
-    )
-
-    _unroll_layer_group(
-        config.num_decoder_layers - config.first_num_dense_layers,
-        training_state,
-        training_state_annotations,
-        mesh,
-        config,
-        layer_name="moe_layers",
-    )
+    unroll_layer_group(config.first_num_dense_layers, layer_name="dense_layers")
+    unroll_layer_group(config.num_decoder_layers - config.first_num_dense_layers, layer_name="moe_layers")
   else:
-    _unroll_layer_group(
-        config.num_decoder_layers, training_state, training_state_annotations, mesh, config, layer_name="layers"
-    )
+    unroll_layer_group(config.num_decoder_layers, layer_name="layers")
 
 
 def _read_train_checkpoint(config, checkpoint_manager, mesh):
