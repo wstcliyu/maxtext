@@ -458,7 +458,7 @@ class Decoder(nn.Module):
           # Iterate over the two layer groups (dense and MoE) and apply layer transformation
           for layer, num_layers, layer_prefix in zip(layers, num_layers_list, layer_prefixes):
             for index in range(num_layers):
-              y =layer(config=cfg, mesh=mesh, name=f"{layer_prefix}_{index}", quant=self.quant)(
+              y = layer(config=cfg, mesh=mesh, name=f"{layer_prefix}_{index}", quant=self.quant)(
                   y,
                   decoder_segment_ids,
                   decoder_positions,
