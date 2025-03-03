@@ -41,7 +41,7 @@ from train import save_checkpoint
 Transformer = models.Transformer
 
 
-def _unroll_layer_group(layer_name, num_layers, training_state, training_state_annotations, mesh, config):
+def _unroll_layer_group(num_layers, training_state, training_state_annotations, mesh, config, layer_name="layers"):
   """Helper function to unroll layers (e.g. dense or MoE) into individual layers."""
   layers = training_state.params["params"]["decoder"].get(layer_name, None)
   layers_annotations = training_state_annotations.params["params"]["decoder"].get(layer_name, None)
@@ -80,18 +80,21 @@ def _possibly_unroll_params(config, training_state, training_state_annotations, 
   if config.decoder_block == "deepseek":
     # Unroll dense and MoE layers separately
     _unroll_layer_group(
-        "dense_layers", config.first_num_dense_layers, training_state, training_state_annotations, mesh, config
+        config.first_num_dense_layers, training_state, training_state_annotations, mesh, config, layer_name="dense_layers"
     )
+
     _unroll_layer_group(
-        "moe_layers",
         config.num_decoder_layers - config.first_num_dense_layers,
         training_state,
         training_state_annotations,
         mesh,
         config,
+        layer_name="moe_layers",
     )
   else:
-    _unroll_layer_group("layers", config.num_decoder_layers, training_state, training_state_annotations, mesh, config)
+    _unroll_layer_group(
+        config.num_decoder_layers, training_state, training_state_annotations, mesh, config, layer_name="layers"
+    )
 
 
 def _read_train_checkpoint(config, checkpoint_manager, mesh):
