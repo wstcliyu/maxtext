@@ -41,39 +41,53 @@ from train import save_checkpoint
 Transformer = models.Transformer
 
 
-def _possibly_unroll_params(config, training_state, training_state_annotations, mesh):
-  """If input layers are scanned, and force_unroll is set,
-  return modify training_state and train_state_annotations to be "unrolled".
-  Otherwise do nothing."""
-  if not config.scan_layers or not config.force_unroll:
-    return
+def _unroll_layer_group(layer_name, num_layers, training_state, training_state_annotations, mesh, config):
+  """Helper function to unroll layers (e.g. dense or MoE) into individual layers."""
+  layers = training_state.params["params"]["decoder"].get(layer_name, None)
+  layers_annotations = training_state_annotations.params["params"]["decoder"].get(layer_name, None)
 
-  training_state_layers = training_state.params["params"]["decoder"]["layers"]
-  training_state_annotations_layers = training_state_annotations.params["params"]["decoder"]["layers"]
+  if layers is None or layers_annotations is None:
+      raise ValueError(f"Missing {layer_name} in training_state or training_state_annotations.")
 
   def new_pspec(x):
-    return jax.sharding.PartitionSpec(*x[0 : config.param_scan_axis] + x[config.param_scan_axis + 1 :])
+      return jax.sharding.PartitionSpec(
+          *(x[0: config.param_scan_axis] + x[config.param_scan_axis + 1:])
+      )
 
-  new_per_layer_state_annotation = jax.tree_util.tree_map(new_pspec, training_state_annotations_layers)
-  new_per_layer_state_sharding = jax.tree_util.tree_map(
-      lambda x: jax.sharding.NamedSharding(mesh, x), new_per_layer_state_annotation
+  new_layer_annotation = jax.tree_util.tree_map(new_pspec, layers_annotations)
+  new_layer_sharding = jax.tree_util.tree_map(
+      lambda x: jax.sharding.NamedSharding(mesh, x), new_layer_annotation
   )
 
-  for i in range(config.num_decoder_layers):
+  for i in range(num_layers):
+      def slice_ith(input_layers):
+          return jax.tree_util.tree_map(
+              lambda x: jax.numpy.take(x, i, axis=config.param_scan_axis), input_layers
+          )
 
-    def slice_ith(input_layers):
-      return jax.tree_util.tree_map(lambda x: jax.numpy.take(x, i, axis=config.param_scan_axis), input_layers)
+      new_layer = jax.jit(slice_ith, out_shardings=new_layer_sharding)(layers)
 
-    # pylint: disable=not-callable
-    new_layer = jax.jit(slice_ith, out_shardings=new_per_layer_state_sharding)(training_state_layers)
+      training_state.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer
+      training_state_annotations.params["params"]["decoder"][f"{layer_name}_{i}"] = new_layer_annotation
 
-    training_state.params["params"]["decoder"][f"layers_{i}"] = new_layer
-    training_state_annotations.params["params"]["decoder"][f"layers_{i}"] = new_per_layer_state_annotation
+  # Remove the original layer collection
+  training_state.params["params"]["decoder"].pop(layer_name, None)
+  training_state_annotations.params["params"]["decoder"].pop(layer_name, None)
 
-  del training_state.params["params"]["decoder"]["layers"]
-  del training_state_annotations.params["params"]["decoder"]["layers"]
+  jax.tree_util.tree_map(lambda x: x.delete(), layers)
 
-  jax.tree_util.tree_map(lambda x: x.delete(), training_state_layers)
+
+def _possibly_unroll_params(config, training_state, training_state_annotations, mesh):
+  """Unroll scanned input layers when force_unroll is set."""
+  if not config.scan_layers or not config.force_unroll:
+      return
+
+  if config.decoder_block == "deepseek":
+      # Unroll dense and MoE layers separately
+      _unroll_layer_group("dense_layers", config.first_num_dense_layers, training_state, training_state_annotations, mesh, config)
+      _unroll_layer_group("moe_layers", config.num_decoder_layers - config.first_num_dense_layers, training_state, training_state_annotations, mesh, config)
+  else:
+      _unroll_layer_group("layers", config.num_decoder_layers, training_state, training_state_annotations, mesh, config)
 
 
 def _read_train_checkpoint(config, checkpoint_manager, mesh):
