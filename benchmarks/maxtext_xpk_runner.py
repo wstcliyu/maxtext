@@ -317,16 +317,12 @@ def build_user_command(
   else:
     run_name_command=f'run_name={name}'
 
-  LOCAL_DIR=f"/tmp/hlo/mazum-llama3-1-70b-1"
-  REMOTE_DIR=f"{wl_config.base_output_directory}/hlo/benchmark/{name}"
   # Construct the command string with proper formatting and line continuations
   command = ' '.join([
       f'{install_libtpu_cmd}',
       f'echo {libtpu_flags} &&' if not is_pw_enabled else '',
       f'export {libtpu_flags} &&' if not is_pw_enabled else '',
       'export ENABLE_PATHWAYS_PERSISTENCE=1 &&',
-      f'export LOCAL_DIR="{LOCAL_DIR}" &&',
-      f'export REMOTE_DIR="{wl_config.base_output_directory}/hlo/benchmark/{name}" &&',
       f'export JAX_PLATFORMS={jax_platforms} &&',
       'export ENABLE_PJRT_COMPATIBILITY=true &&',
       'python3 MaxText/train.py MaxText/configs/base.yml',
@@ -335,8 +331,7 @@ def build_user_command(
       f'model_name={wl_config.model.model_type}',
       f'base_output_directory={wl_config.base_output_directory}',
       f'{vertex_tensorboard}',
-      f'{run_name_command} &&'
-      f'gcloud storage cp -r ${LOCAL_DIR} ${REMOTE_DIR}',
+      f'{run_name_command} '
   ])
   return command
 
@@ -435,6 +430,10 @@ def generate_xpk_workload_cmd(
     docker_image_flag = f'--base-docker-image="{wl_config.base_docker_image}"'
 
   print(f'User command: {user_command}')
+  HLO_FOLDER=f"gs://mazumdera-test-bucket-us-east5/maxtext/contextpara/mazum-llama3-1-70b-1/hlos"
+  now = datetime.datetime.now()
+  timestamp = now.strftime("%Y-%m-%d-%H:%M")
+
   return (
       (
           f'{workload_create_command}'
@@ -450,6 +449,7 @@ def generate_xpk_workload_cmd(
           f' --workload={name}'
           f' --priority={wl_config.priority}'
           f' --max-restarts={wl_config.max_restarts}'
+          f' --debug-dump-gcs={HLO_FOLDER}/{wl_config.model.model_name}_{timestamp}_{wl_config.num_slices}_{temp_post_fix}',
           # ' --use-vertex-tensorboard'
           # f' --experiment-name={test_purpose_name}'
           f' {additional_flags}'
