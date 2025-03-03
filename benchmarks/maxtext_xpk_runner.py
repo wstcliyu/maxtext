@@ -317,12 +317,16 @@ def build_user_command(
   else:
     run_name_command=f'run_name={name}'
 
+  LOCAL_DIR=f"/tmp/hlo/mazum-llama3-1-70b-1"
+  REMOTE_DIR=f"{wl_config.base_output_directory}/hlo/benchmark/{name}"
   # Construct the command string with proper formatting and line continuations
   command = ' '.join([
       f'{install_libtpu_cmd}',
       f'echo {libtpu_flags} &&' if not is_pw_enabled else '',
       f'export {libtpu_flags} &&' if not is_pw_enabled else '',
       'export ENABLE_PATHWAYS_PERSISTENCE=1 &&',
+      f'export LOCAL_DIR="{LOCAL_DIR}" &&',
+      f'export REMOTE_DIR="{wl_config.base_output_directory}/hlo/benchmark/{name}" &&',
       f'export JAX_PLATFORMS={jax_platforms} &&',
       'export ENABLE_PJRT_COMPATIBILITY=true &&',
       'python3 MaxText/train.py MaxText/configs/base.yml',
@@ -331,7 +335,8 @@ def build_user_command(
       f'model_name={wl_config.model.model_type}',
       f'base_output_directory={wl_config.base_output_directory}',
       f'{vertex_tensorboard}',
-      f'{run_name_command}'
+      f'{run_name_command} &&'
+      f'gcloud storage cp -r ${LOCAL_DIR} ${REMOTE_DIR}',
   ])
   return command
 
@@ -512,8 +517,8 @@ def on_device_benchmark_runner(
 def main() -> int:
   # Variables to configure:
   output_bucket = 'gs://mazumdera-test-bucket-us-east5/maxtext/contextpara'
-  # base_docker_image = 'gcr.io/tpu-prod-env-multipod/mazumdera_runner3' #_DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
-  base_docker_image = _DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
+  base_docker_image = 'gcr.io/tpu-prod-env-multipod/mazumdera_runner3' #_DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
+  # base_docker_image = _DEFAULT_MAXTEXT_BASE_DOCKER_IMAGE_NAME
 
   # Set up the clusters to run workloads on!
   v5e_cluster_config = XpkClusterConfig(

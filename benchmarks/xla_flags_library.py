@@ -203,5 +203,6 @@ DEBUG_LOGS = {
     "TPU_VMODULE": "tpu_configuration_ops_impl=3",  # Enable TPU logging
 }
 
-Anisha =     (
-  ) + DENSE_VMEM_LIMIT_FLAG + ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR + HOST_OFFLOAD_FLAGS
+HLO_NAME = "mazum-llama3-1-70b-1"
+LOCAL_DIR=f"/tmp/hlo/{HLO_NAME}"
+Anisha =     f" --xla_dump_to={LOCAL_DIR} --xla_dump_large_constants=true " +DENSE_VMEM_LIMIT_FLAG + ENABLE_SPARSECORE_OFFLOADING_FOR_RS_AG_AR + HOST_OFFLOAD_FLAGS
